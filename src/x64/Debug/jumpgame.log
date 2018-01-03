@@ -1,0 +1,21 @@
+﻿生成启动时间为 2018/1/3 16:37:32。
+     1>项目“D:\WORK\projects\jumpgame\jumpgame\jumpgame.vcxproj”在节点 2 上(Build 个目标)。
+     1>ClCompile:
+         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_amd64\CL.exe /c /I.\GeneratedFiles /I. /ID:\Qt\Qt5.6.3\5.6.3\msvc2013_64\include /I.\GeneratedFiles\Debug /ID:\Qt\Qt5.6.3\5.6.3\msvc2013_64\include\QtCore /ID:\Qt\Qt5.6.3\5.6.3\msvc2013_64\include\QtGui /ID:\Qt\Qt5.6.3\5.6.3\msvc2013_64\include\QtWidgets /Zi /nologo /W1 /WX- /Od /D UNICODE /D WIN32 /D WIN64 /D QT_DLL /D QT_CORE_LIB /D QT_GUI_LIB /D QT_WIDGETS_LIB /Gm- /EHsc /MDd /GS /fp:precise /Zc:wchar_t /Zc:forScope /Fo"x64\Debug\\" /Fd"x64\Debug\vc120.pdb" /Gd /TP /errorReport:prompt CJumpManger.cpp
+         CJumpManger.cpp
+     1>D:\packbag\lib\opencv\build\include\opencv2/core/mat.hpp(1965): warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+     1>D:\packbag\lib\opencv\build\include\opencv2/core/persistence.hpp : warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+     1>D:\packbag\lib\opencv\build\include\opencv2/core/utility.hpp : warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+       Link:
+         C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\bin\x86_amd64\link.exe /ERRORREPORT:PROMPT /OUT:"D:\WORK\projects\jumpgame\x64\Debug\\jumpgame.exe" /NOLOGO /LIBPATH:D:\Qt\Qt5.6.3\5.6.3\msvc2013_64\lib qtmaind.lib Qt5Cored.lib Qt5Guid.lib Qt5Widgetsd.lib opencv_ts300d.lib opencv_world300d.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"D:\WORK\projects\jumpgame\x64\Debug\jumpgame.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"D:\WORK\projects\jumpgame\x64\Debug\jumpgame.lib" /MACHINE:X64 x64\Debug\myico.res
+         x64\Debug\moc_jumpgame.obj
+         x64\Debug\qrc_jumpgame.obj
+         x64\Debug\jumpgame.obj
+         x64\Debug\CJumpManger.obj
+         x64\Debug\main.obj
+         jumpgame.vcxproj -> D:\WORK\projects\jumpgame\x64\Debug\jumpgame.exe
+     1>已完成生成项目“D:\WORK\projects\jumpgame\jumpgame\jumpgame.vcxproj”(Build 个目标)的操作。
+
+生成成功。
+
+已用时间 00:00:02.52
