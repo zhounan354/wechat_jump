@@ -1,0 +1,1000 @@
+#include "videoRoom.h"
+#include "QPlayControlWdg.h"
+#include <QMessageBox>
+
+#include "QAdviceManagerWdg.h"
+#include "QBottomExpandWdg.h"
+#include "QSceneManagerWdg.h"
+#include "qTipMsgDisplay.h"
+
+#include <QMouseEvent>
+#include <QMessageBox>
+#include <QStatusBar>
+#include <QTimer>
+
+//#include "RequestSegmentTaskFileList.h"
+#include "RequestGetTaskFileListEx.h"
+#include "RequestTaskRepairFiles.h"
+#include "RequestAddFolderUrl.h"
+#include "RequestUploadFileUrl.h"
+#include "RequestCheckUploadFiles.h"
+#include "RequestUploadFileSucessUrl.h"
+#include "RequestDeleteRepairFiles.h"
+#include "RequestTaskAuditor.h"
+#include "RequestRepairFileUrl.h"
+//#include "RequestTaskFileList.h"
+#include "RequestOssStsSample.h"
+
+#include "qScreenShot.h"
+#include "QDownloadTask.h"
+#include "QDownloadThumPicTask.h"
+#include "QUploadTask.h"
+#include "QCustomEvent.h"
+#include "CDataCenter.h"
+#include "qCustomMsgBox.h"
+#include "QDownloadingWdg.h"
+#include "QMaskWidget.h"
+#include "QWaitingWdg.h"
+#include "QRatioWdg.h"
+#include "QToolTipsDlg.h"
+#include <QDesktopWidget>
+#include "QToolTipsDlg.h"
+#include "QWhServer.h"
+#include "QWhClient.h"
+#include <QStandardPaths>
+#include <windows.h>
+
+#define  TITLEINFO_WIDTH 200
+#define  DEFAULT_PIC  ":/videoRoom/Resources/fanxiu/default.png"
+
+#define CUSTOM_TYPE 10000
+
+//传输回调
+/*
+传输类型
+传输状态
+进度信息
+*/
+
+static videoRoom *g_pVideoRoom = NULL;
+void TransCallBack(STPROGRESS stProgress)
+{
+	//qDebug() << QStringLiteral("传输回调信息:")<< stProgress.strLocalFile;
+	QCustomEvent *pEvent = new QCustomEvent(cbEvent);
+	//pEvent->transType = transType;
+	//pEvent->cardStatus = cardStatus;
+	pEvent->stData = stProgress;
+
+	QApplication::postEvent(g_pVideoRoom, pEvent);
+}
+
+static QString getMetricsText(QLabel *pLabel, int nLabelWidth,const  QString &strText)
+{
+	QFontMetrics fontWidth(pLabel->font());
+	QString elideNote = fontWidth.elidedText(strText, Qt::ElideRight, nLabelWidth);
+	return elideNote;
+}
+
+static bool compareFileNumber(REPAIREFILEITEM &x, REPAIREFILEITEM &y)
+{
+	if (x.repairNum == y.repairNum)
+	{
+		return x.repairFileId < y.repairFileId;
+	}
+
+	return (x.repairNum < y.repairNum);
+}
+
+videoRoom::videoRoom(HWND hwnd, QWidget *parent)
+	: QMainWindow(parent), m_sceneMode(CURTASK_MODE),m_mainHwnd(hwnd)
+{
+	qDebug() << m_mainHwnd;
+	setAttribute(Qt::WA_TranslucentBackground);
+	resize(1164, 670);
+	showMaximized();
+
+	//QMultiChoseMessageBox multiMsg(this, QStringLiteral("提示"), QStringLiteral("是否保存对《》的返修建议的返修建议的返修建议的返修建议的返修建议"));
+	//int nRet = multiMsg.exec();
+	setAttribute(Qt::WA_DeleteOnClose);
+	
+	setWindowFlags(Qt::FramelessWindowHint | windowFlags());
+	setWindowTitle(QStringLiteral("审片室"));
+	//setAutoFillBackground(true);
+	setWindowIcon(QIcon(":/videoRoom/Resources/icon.png"));
+
+	setMinimumSize(1164, 670);
+
+	initWidget();
+
+	m_pTipsDlg = new QToolTipsDlg(this);
+	m_pOssStstimer = new QTimer(this);
+	connect(m_pOssStstimer, &QTimer::timeout, this, &videoRoom::onUpdateOssSts);
+
+	//m_strLastPath = QCoreApplication::applicationDirPath() + "/Temp";
+	m_strLastPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+	g_pVideoRoom = this;
+	//m_pCallBack = pCB;
+	//m_pDataCenter = new CDataCenter();
+	m_isWindowMax2Normal = false;
+	m_bPressed = false;
+
+	m_timerIdSceneHide = -1;
+	m_timerIdSceneShow = -1;
+	m_timerIdAdviceShow = -1;
+	m_timerIdAdviceHide = -1;
+
+
+	//设置线程池线程数
+	m_threadPool.setMaxThreadCount(5);
+	registerSignalMetaType();
+
+
+	//this->centralWidget()->setSizeGripEnabled(true);
+	m_mapPenInfo[ITEM_TEXT].nWidth = 12;
+
+	//! 添加遮罩
+	m_pWaitingWdg = new QWaitingWdg(nullptr);
+	m_pWaitingWdg->setModal(true);
+	m_pWaitingWdg->setObjectName("QWaitingWdg");
+	m_pWaitingWdg->hide();
+
+	m_pMaskWidget = new QMaskWidget();
+	m_pMaskWidget->setParent(this);
+	m_pMaskWidget->SetMainWidget(this);
+	m_pMaskWidget->SetDialogNames(QStringList() << "QWaitingWdg");
+	m_pMaskWidget->hide();
+	//m_dlgAdvicePreview->installEventFilter(m_pMaskWidget);
+	m_pWaitingWdg->installEventFilter(m_pMaskWidget);
+	//m_maDownLoadWidget->installEventFilter(m_pMaskWidget);
+
+	////获取可用桌面大小
+	//QDesktopWidget* desktopWidget = QApplication::desktop();
+	//QRect deskRect = desktopWidget->screenGeometry(QCursor::pos());
+	//move(deskRect.left() + (deskRect.width() - width()) / 2, deskRect.top() + (deskRect.height() - height()) / 2);
+}
+
+void videoRoom::mouseDoubleClickEvent(QMouseEvent * event)
+{
+	if (event->button() == Qt::LeftButton && m_widgetTitleCtrl->rect().contains(this->mapFromGlobal(QCursor::pos())))
+	{
+		if ((this->windowState() & Qt::WindowMaximized) == Qt::WindowMaximized)
+		{
+			onNormalBtnClicked();
+		}
+		else
+		{
+			onMaxBtnClicked();
+		}
+	}
+	QMainWindow::mouseDoubleClickEvent(event);
+}
+
+void videoRoom::mouseReleaseEvent(QMouseEvent *event)
+{
+	Q_UNUSED(event);
+	m_bPressed = false;
+	QMainWindow::mouseReleaseEvent(event);
+}
+
+void videoRoom::mousePressEvent(QMouseEvent *event)
+{
+	if (event->button() == Qt::LeftButton && m_widgetTitleCtrl->rect().contains(this->mapFromGlobal(QCursor::pos())))
+	{
+		m_bPressed = true;
+		m_point = event->globalPos();
+		m_pointRelative = m_point - mapToGlobal(QPoint(0, 0));
+	}
+
+	m_dockVolume->hide();
+	raise();
+	activateWindow();
+	setFocus();
+
+	m_pSceneManagerWdg->cancelSelectedCard();
+	m_pSceneManagerWdg->setDoubleClickSelected(m_nCurTaskId,m_nCurFileId,true);
+
+	QMainWindow::mousePressEvent(event);
+}
+
+void videoRoom::mouseMoveEvent(QMouseEvent *event)
+{
+	if (m_bPressed)
+	{
+		QPoint ptMouse = event->globalPos();
+		//获取可用桌面大小
+		QDesktopWidget* desktopWidget = QApplication::desktop();
+		QRect deskRect = desktopWidget->screenGeometry(ptMouse);
+		if (ptMouse.y() <= deskRect.y()+3)
+		{
+			if((this->windowState() & Qt::WindowMaximized) != Qt::WindowMaximized)
+				onMaxBtnClicked();
+			QMainWindow::mouseMoveEvent(event);
+			return;
+		}
+
+		if ((this->windowState() & Qt::WindowMaximized) == Qt::WindowMaximized)
+		{
+			m_iWOri = this->width();
+			m_iXOri = mapToGlobal(QPoint(0, 0)).x();
+
+			onNormalBtnClicked();
+			m_isWindowMax2Normal = true;
+		}
+		else if(m_isWindowMax2Normal)
+		{
+			m_isWindowMax2Normal = false;
+			//按比例计算窗口变化后的左上角原点的横坐标，最初为(0,0)
+			int iXDest = ptMouse.x() - ((ptMouse.x() - m_iXOri)*width()) / m_iWOri;
+			//纵坐标不变
+			QPoint ptOffset = QPoint(iXDest, 0);
+
+			this->move(ptOffset);
+			m_pointRelative = ptMouse - ptOffset;
+		}
+
+		move(ptMouse - m_pointRelative);
+	}
+	QMainWindow::mouseMoveEvent(event);
+}
+
+void videoRoom::initWidget()
+{
+	QWidget* widgetBorder = new QWidget(this);
+	setCentralWidget(widgetBorder);
+	m_layoutBorder = new QHBoxLayout(widgetBorder);
+	m_layoutBorder->setMargin(0);
+	//widgetBorder->setCursor(Qt::SizeVerCursor);
+
+	//总窗口
+	QWidget* widgetCenter = new QWidget(widgetBorder);
+	//widgetCenter->setCursor(Qt::ArrowCursor);
+	m_layoutBorder->addWidget(widgetCenter, 1);
+
+	QPalette paletteBackground;
+	paletteBackground.setBrush(QPalette::Background, QColor(0, 0, 0));
+	widgetCenter->setAutoFillBackground(true);
+	widgetCenter->setPalette(paletteBackground);
+
+
+	m_layoutCenter = new QHBoxLayout(widgetCenter);
+	m_pAdviceManager = new QAdviceManagerWdg(widgetCenter); //建议管理
+	m_pAdviceManager->setFixedWidth(ADVICE_WIDTH);
+	//m_pAdviceManager->setVisible(false);
+
+	connect(m_pAdviceManager, &QAdviceManagerWdg::groupPlayAudio, this, &videoRoom::onGroupPlayAudio);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::groupPlayVideo, this, &videoRoom::onGroupPlayVideo);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::groupRedoUpload, this, &videoRoom::onGroupRedoUpload);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::groupRedoDownload, this, &videoRoom::onGroupRedoDownload);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::hoverOneAdviceCard, this, &videoRoom::onHoverOneAdviceCard);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::leaveHoverOneAdviceCard, this, &videoRoom::onLeaveHoverOneAdviceCard);
+
+	connect(m_pAdviceManager, &QAdviceManagerWdg::emitUploadAdviceBtnClick, this, &videoRoom::onUploadAdviceBtnClick);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::emitDownloadBtnClick, this, &videoRoom::onDownloadAdviceBtnClick);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::doubleClickOneAdviceCard, this, &videoRoom::onDoubleClickOneAdviceCard);
+
+	connect(m_pAdviceManager, &QAdviceManagerWdg::emitDelBtnClick, this, &videoRoom::onDelAdviceBtnClick);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::emitPassBtnClick, this, &videoRoom::onPassAdviceBtnClick);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::emitRejectBtnClick, this, &videoRoom::onRejectAdviceBtnClick);
+
+	//左侧主栏
+	m_widgetLeft = new QWidget(widgetCenter);
+	m_layoutCenter->setMargin(0);
+	m_layoutCenter->setSpacing(0);
+	m_layoutCenter->addWidget(m_widgetLeft, 1);
+	//layoutCenter->addLayout(pAdvanceLyout);
+	m_layoutCenter->addWidget(m_pAdviceManager);
+
+	QVBoxLayout* layoutLeft = new QVBoxLayout(m_widgetLeft);
+	//标题
+	QString strTitleQss = "QPushButton{border:0px;background-color:rgba(0,0,0,0);}"
+		"QPushButton:hover{background-color:#BF2934;}"
+		"QPushButton:pressed{background-color:#BF2934;}";
+
+	m_widgetTitle = new QWidget(m_widgetLeft);
+	m_widgetTitle->setFixedHeight(110);
+
+	m_widgetTitleCtrl = new QWidget(m_widgetTitle);
+	m_widgetTitleCtrl->setFixedHeight(30);
+	QHBoxLayout *pTitleCtrlLyout = new QHBoxLayout(m_widgetTitleCtrl);
+	m_pMinBtn = new QPushButton();
+	m_pMinBtn->setFixedSize(45,30);
+	m_pMinBtn->setIcon(QIcon(":/videoRoom/Resources/title/minbtn_normal.png"));
+	m_pMinBtn->setIconSize(QSize(45, 30));
+	m_pMinBtn->setStyleSheet(strTitleQss);
+	m_pMinBtn->setFocusPolicy(Qt::NoFocus);
+
+	m_pMaxBtn = new QPushButton();
+	m_pMaxBtn->setVisible(false);
+	m_pMaxBtn->setFixedSize(45, 30);
+	m_pMaxBtn->setIcon(QIcon(":/videoRoom/Resources/title/maxbtn_normal.png"));
+	m_pMaxBtn->setIconSize(QSize(45, 30));
+	m_pMaxBtn->setStyleSheet(strTitleQss);
+	m_pMaxBtn->setFocusPolicy(Qt::NoFocus);
+
+	m_pNormalBtn = new QPushButton();
+	//m_pNormalBtn->setVisible(false);
+	m_pNormalBtn->setFixedSize(45, 30);
+	m_pNormalBtn->setIcon(QIcon(":/videoRoom/Resources/title/normalbtn_normal.png"));
+	m_pNormalBtn->setIconSize(QSize(45, 30));
+	m_pNormalBtn->setStyleSheet(strTitleQss);
+	m_pNormalBtn->setFocusPolicy(Qt::NoFocus);
+
+	m_pCloseBtn = new QPushButton();
+	m_pCloseBtn->setFixedSize(45, 30);
+	m_pCloseBtn->setIcon(QIcon(":/videoRoom/Resources/title/closebtn_normal.png"));
+	m_pCloseBtn->setIconSize(QSize(45, 30));
+	m_pCloseBtn->setStyleSheet(strTitleQss);
+	m_pCloseBtn->setFocusPolicy(Qt::NoFocus);
+
+	pTitleCtrlLyout->addWidget(m_pMinBtn,0, Qt::AlignRight);
+	pTitleCtrlLyout->addWidget(m_pMaxBtn, 0, Qt::AlignRight);
+	pTitleCtrlLyout->addWidget(m_pNormalBtn,0, Qt::AlignRight);
+	pTitleCtrlLyout->addWidget(m_pCloseBtn, 0, Qt::AlignRight);
+	
+	pTitleCtrlLyout->setAlignment(Qt::AlignRight);
+	pTitleCtrlLyout->setMargin(0);
+	pTitleCtrlLyout->setSpacing(0);
+	
+	m_pPreTaskBtn = new QPushButton();
+	m_pPreTaskBtn->setToolTip(QStringLiteral("上一任务"));
+	m_pPreTaskBtn->setFixedSize(13, 21);
+	m_pPreTaskBtn->setStyleSheet("QPushButton{border-image:url(:/videoRoom/Resources/scene/pre_nromal.png);}"
+		"QPushButton:hover{border-image:url(:/videoRoom/Resources/scene/pre_hover.png);}"
+		"QPushButton:pressed{border-image:url(:/videoRoom/Resources/scene/pre_nromal.png);}"
+		"QPushButton:!enabled{border-image:url(:/videoRoom/Resources/scene/pre_hover.png);}");
+	m_pPreTaskBtn->setFocusPolicy(Qt::NoFocus);
+
+
+	//任务编号
+	m_pTitleLabelTaskNum = new QLabel();
+	m_pTitleLabelTaskNum->setMinimumWidth(TITLEINFO_WIDTH);
+	//m_pTitleLabelTaskNum->setWordWrap(true);
+	m_pTitleLabelTaskNum->adjustSize();
+	m_pTitleLabelTaskNum->setAlignment(Qt::AlignVCenter| Qt::AlignHCenter);
+	m_pTitleLabelTaskNum->setStyleSheet("QLabel{font-family: Microsoft YaHei;color:white;font-size:16px;font-weight:none;}");
+
+	//任务作者
+	m_pTitleLabelAuthor = new QLabel();
+	m_pTitleLabelTaskNum->setMinimumWidth(TITLEINFO_WIDTH);
+	//m_pTitleLabelAuthor->setWordWrap(true);
+	m_pTitleLabelAuthor->adjustSize();
+	m_pTitleLabelAuthor->setAlignment(Qt::AlignVCenter | Qt::AlignHCenter);
+	m_pTitleLabelAuthor->setStyleSheet("QLabel{font-family: Microsoft YaHei;color:white;font-size:16px;font-weight:none;}");
+	QVBoxLayout *pTaskLabelLy = new QVBoxLayout();
+	pTaskLabelLy->addWidget(m_pTitleLabelTaskNum);
+	pTaskLabelLy->addWidget(m_pTitleLabelAuthor);
+
+
+	setTitleInfo(QStringLiteral("任务加载中"),"");
+	m_pNextTaskBtn = new QPushButton();
+	m_pNextTaskBtn->setToolTip(QStringLiteral("下一任务"));
+	m_pNextTaskBtn->setFixedSize(13, 21);
+	m_pNextTaskBtn->setStyleSheet("QPushButton{border-image:url(:/videoRoom/Resources/scene/next_normal.png);}"
+		"QPushButton:hover{border-image:url(:/videoRoom/Resources/scene/next_hover.png);}"
+		"QPushButton:pressed{border-image:url(:/videoRoom/Resources/scene/next_normal.png);}"
+		"QPushButton:!enabled{border-image:url(:/videoRoom/Resources/scene/next_hover.png);}");
+	m_pNextTaskBtn->setFocusPolicy(Qt::NoFocus);
+
+	QHBoxLayout *pTaskLyout = new QHBoxLayout();
+	pTaskLyout->addWidget(m_pPreTaskBtn);
+	pTaskLyout->addSpacing(5);
+	//pTaskLyout->addWidget(m_pTitleLabelTaskNum);
+	pTaskLyout->addLayout(pTaskLabelLy);
+	pTaskLyout->addSpacing(5);
+	pTaskLyout->addWidget(m_pNextTaskBtn);
+	pTaskLyout->setAlignment(Qt::AlignVCenter|Qt::AlignHCenter);
+	pTaskLyout->setMargin(0);
+
+	QVBoxLayout *pTitleVBLyout = new QVBoxLayout(m_widgetTitle);
+	pTitleVBLyout->addWidget(m_widgetTitleCtrl);
+	pTitleVBLyout->addLayout(pTaskLyout);
+	pTitleVBLyout->setMargin(0);
+	//m_widgetTitle->setStyleSheet("border:1px solid blue;");
+
+	//视频区域
+	QWidget* widgetPlayer = new QWidget(m_widgetLeft);
+	//底部控制栏
+	m_pSceneManagerWdg = new QSceneManagerWdg(m_widgetLeft);
+	m_pSceneManagerWdg->setFixedHeight(SCENE_HEIGHT);
+
+	connect(m_pSceneManagerWdg, &QSceneManagerWdg::oneCardDoubleClick,this, &videoRoom::onOneScenceCardDoubleClick);
+	connect(m_pSceneManagerWdg, &QSceneManagerWdg::oneCardDownloadRightMenuClick, this, [=](qint64 nTaskId,qint64 nFileId) {onOneSceneCardDownloadRightMenuClick(nTaskId, nTaskId); });
+	//pSceneDisplayWdg->setStyleSheet("border:1px solid red;");
+	//m_pSceneManagerWdg->addOneCard("",":/videoRoom/Resources/display/default.png");
+
+	//视频区域添加到此处
+	m_pFoldBtn = new QPushButton; //展开
+	m_pFoldBtn->setToolTip(QStringLiteral("展开"));
+	m_pFoldBtn->setFixedSize(10, 60);
+	m_pFoldBtn->setStyleSheet("QPushButton{border-image:url(:/videoRoom/Resources/fanxiu/fold_normal.png);}"
+		"QPushButton:hover{border-image:url(:/videoRoom/Resources/fanxiu/fold_hover.png);}"
+		"QPushButton:pressed{border-image:url(:/videoRoom/Resources/fanxiu/fold_hover.png);}"
+		"QPushButton:!enabled{border-image:url(:/videoRoom/Resources/fanxiu/fold_normal.png);}");
+	m_pFoldBtn->setVisible(false);
+	m_pFoldBtn->setFocusPolicy(Qt::NoFocus);
+
+	m_widgetMovieArea = new qWidgetAreaContainer(widgetPlayer);
+
+	m_videoWindow = new QVideoWindow(m_widgetMovieArea);
+
+	connect(m_videoWindow, &QVideoWindow::signalMousePress, m_widgetMovieArea, &qWidgetAreaContainer::slotMousePress);
+	connect(m_videoWindow, &QVideoWindow::signalMouseMove, m_widgetMovieArea, &qWidgetAreaContainer::slotMouseMove);
+	connect(m_videoWindow, &QVideoWindow::signalMouseRelease, m_widgetMovieArea, &qWidgetAreaContainer::slotMouseRelease);
+	connect(m_videoWindow, &QVideoWindow::signalWheelScale, m_widgetMovieArea, &qWidgetAreaContainer::slotWheelScale);
+	//m_videoWindow->getPlayer()->videoCapture()->setAutoSave(false);
+	connect(m_widgetMovieArea,&qWidgetAreaContainer::reloadFileBtnClick,this, &videoRoom::onReloadFileBtnClick);
+	
+
+	//m_widgetMovieArea->setStyleSheet("border:1px solid red;");
+	m_widgetMovieArea->setWidget(m_videoWindow);
+
+	//左侧画板控制
+	QWidget* widgetPen = new QWidget(widgetPlayer);
+	widgetPen->setMaximumSize(50, 494);
+	widgetPen->setMinimumSize(50, 360);
+
+	//画笔选择框
+	m_widgetPenChoose = new qWidgetPenChoose(widgetPen);
+	connect(m_widgetPenChoose, &qWidgetPenChoose::signalBtnClicked, this, &videoRoom::onPenIdChanged);
+	connect(m_widgetPenChoose, &qWidgetPenChoose::signalBtnMoved, this, &videoRoom::onPenWidgetMoved);
+	m_widgetPenChoose->setVisible(false);
+
+	QVBoxLayout* layoutPen = new QVBoxLayout(widgetPen);
+	layoutPen->setMargin(0);
+	layoutPen->setAlignment(Qt::AlignTop);
+	layoutPen->addWidget(m_widgetPenChoose, 1);
+
+	//画笔在此绘画
+	m_widgetPaintArea = new qWdgPainterArea(m_widgetMovieArea);
+	m_widgetPaintArea->setVisible(false);
+
+	connect(m_widgetPaintArea, &qWdgPainterArea::signalMousePress, m_widgetMovieArea, &qWidgetAreaContainer::slotMousePress);
+	connect(m_widgetPaintArea, &qWdgPainterArea::signalMouseMove, m_widgetMovieArea, &qWidgetAreaContainer::slotMouseMove);
+	connect(m_widgetPaintArea, &qWdgPainterArea::signalMouseRelease, m_widgetMovieArea, &qWidgetAreaContainer::slotMouseRelease);
+	connect(m_widgetPaintArea, &qWdgPainterArea::signalWheelScale, m_widgetMovieArea, &qWidgetAreaContainer::slotWheelScale);
+	connect(m_widgetPaintArea, &qWdgPainterArea::signalModify, this, &videoRoom::slotCheckCommitable);
+	
+	QHBoxLayout* layoutPlayer = new QHBoxLayout(widgetPlayer);
+	layoutPlayer->setMargin(0);
+	layoutPlayer->setSpacing(0);
+	layoutPlayer->addWidget(widgetPen, 0, Qt::AlignLeft);
+	layoutPlayer->addWidget(m_widgetMovieArea, 1);
+	//layoutPlayer->addWidget(m_pDownLoadingWdg, 1); //添加下载动图框
+	//m_widgetMovieArea->hide();
+	//layoutPlayer->addWidget(m_widgetPaintArea, 1);
+	layoutPlayer->addWidget(m_pFoldBtn, 0, Qt::AlignRight);
+
+
+	////////////////////////////////////////////////////////////////////
+
+	//播放控制栏
+	m_pRatioWdg = new QRatioWdg(this);
+
+	m_pPlayControlWdg = new QPlayControlWdg(m_widgetLeft);
+	m_pPlayControlWdg->setRatioWdg(m_pRatioWdg);
+	m_pPlayControlWdg->setPlayer(m_videoWindow->getPlayer());
+	m_pPlayControlWdg->setFixedHeight(80);
+
+	connect(m_pPlayControlWdg, &QPlayControlWdg::playCtrlCommitBtnClick, this, &videoRoom::onPlayCtrlCommitBtnClick);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::signalMoved, this, &videoRoom::remapDock);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::editBtnChecked, this, &videoRoom::onEditBtnChecked);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::audioBtnClicked, this, &videoRoom::onAudioEditClicked);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::dragBtnChecked, this, &videoRoom::onDragModeOn);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::zoomBtnCkecked, this, &videoRoom::onZoomModeOn);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::signalHoverPos, this, &videoRoom::onHoverSliderPos);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::signalHoverPosNoPic, this, &videoRoom::onHoverSliderPosNoPic);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::signalLeavePos, this, &videoRoom::onLeaveSliderPos);
+	//截图信号传出
+	connect(m_pPlayControlWdg, &QPlayControlWdg::onFrameCaptured, this, &videoRoom::onFrameCaptured, Qt::DirectConnection);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::signalPlayMidea, this, &videoRoom::setEditMovieSwitch);
+	//connect(m_pPlayControlWdg, &QPlayControlWdg::signalClearPaint, this, [=] {m_widgetPaintArea->clear(); });
+	//connect(m_pPlayControlWdg, &QPlayControlWdg::signalAdviceFrameClicked, this, &videoRoom::slotAdviceFrameClicked);
+	//connect(m_pPlayControlWdg, &QPlayControlWdg::signalAdviceFrameShow, this, &videoRoom::slotShowAdviceFrame, Qt::DirectConnection);
+	//connect(m_pPlayControlWdg, &QPlayControlWdg::signalNoAdviceShow, this, &videoRoom::slotNoAdviceFrame, Qt::DirectConnection);
+
+	connect(m_pPlayControlWdg, &QPlayControlWdg::signalCheckEdit, this, &videoRoom::slotTaskChangeCheckEdit, Qt::DirectConnection);
+	connect(m_pPlayControlWdg, &QPlayControlWdg::signalDownload, this, [=] {
+		//这里要判断是否是另存为
+		if (0 != choseDownloadDir(m_strLastPath, this))
+			return;
+
+		bool bSaveAs = false;
+		if (0 == m_strLastPath.compare(m_strDefScenePath)) //0 =
+		{
+			qDebug() << "默认路径缓存";
+		}
+		else
+		{
+			bSaveAs = true; //表示另存为
+		}
+
+		FILEITEM taskFileItem = CSingleton<CDataCenter>::GetInstance()->getSceneTaskFileItem(m_nCurTaskId, m_nCurFileId);
+		//检测文件是否在下载中
+		bool bDowloading = false;
+		for (auto itVal : m_lstDownloading)
+		{
+			if (itVal == taskFileItem.id)
+			{
+				TRACELOG(LOG_INFO, "文件正在下载中：%s ", taskFileItem.fileUrl.toLocal8Bit().data());
+				showTip(QStringLiteral("文件正在下载中"));
+				bDowloading = true;
+				break;
+			}
+		}
+		if (bDowloading)
+		{
+			return;
+		}
+
+		QString strLocalPath = m_strDefScenePath/*m_strLastPath*/;
+		if (createDir(strLocalPath) < 0)
+		{
+			TRACELOG(LOG_ERROR, "创建下载文件目录失败, %s", strLocalPath.toLocal8Bit().data());
+			return;
+		}
+
+		//下载场景文件
+		QList<FilePair> oLst;
+		STPROGRESS stProgress;
+		if (!taskFileItem.fileUrl.isEmpty())//oss路径
+		{
+			QFileInfo fileLocal(strLocalPath + "/" + taskFileItem.fileName);
+			FilePair stFP;
+			stFP.strLocalFile = fileLocal.absoluteFilePath();
+			stFP.strOssFile = taskFileItem.fileUrl; //oss 路径
+			if (bSaveAs)
+				stFP.strSaveAsPath = m_strLastPath + "/" + taskFileItem.fileName;
+
+			oLst.push_back(stFP);
+			stProgress.cardMediaType = _CARD_MEDIATYPE::PIC;
+
+			//判断文件是否需要下载
+			QFileInfo file1(stFP.strLocalFile);
+			if (file1.exists() && (file1.lastModified().toMSecsSinceEpoch() >= taskFileItem.updateTime &&
+				file1.size() == taskFileItem.fileSize))
+			{
+				//复制文件到另存为目录下
+				if (bSaveAs)
+					copyFileToSaveAs(stFP.strLocalFile, stFP.strSaveAsPath);
+
+				return;
+			}
+		}
+		stProgress.cardType = CARD_TYPE::CARDTYPE_SCENE;
+		stProgress.cardStatus = CARD_STATUS::DOWNLOADING;
+		stProgress.projectid = m_nProjectId;
+		stProgress.segmentid = m_nSegmentId;
+		stProgress.taskid = m_nCurTaskId;
+		stProgress.fileid = taskFileItem.id;
+		stProgress.oList = oLst;
+		stProgress.token = m_strToken;
+		m_lstDownloading.push_back(stProgress.fileid);
+		//置卡片状态
+		m_pSceneManagerWdg->SetCardStatus(m_nCurTaskId, taskFileItem.id, CARD_STATUS::DOWNLOADING);
+		QDownloadTask *pUploadTask = new QDownloadTask(stProgress, TransCallBack);
+		m_threadPool.start(pUploadTask);
+	});
+
+	//connect(m_pPlayControlWdg, &QPlayControlWdg::commitBtnHover, this, &videoRoom::onPlayCtrlComitBtnHover, Qt::DirectConnection);
+
+
+	//当前文件属于第几个
+	m_pBottomExpandWdg = new QBottomExpandWdg(m_widgetLeft);
+	m_pBottomExpandWdg->setFixedHeight(30);
+
+	//为了缩放动画方便，添加布局嵌套
+	m_widgetLeftUp = new QWidget(m_widgetLeft);
+	QVBoxLayout* layoutLeftUp = new QVBoxLayout(m_widgetLeftUp);
+	layoutLeftUp->setMargin(0);
+	layoutLeftUp->setSpacing(0);
+	layoutLeftUp->addWidget(m_widgetTitle, 0, Qt::AlignTop);
+	layoutLeftUp->addWidget(widgetPlayer, 1);
+	layoutLeftUp->addWidget(m_pPlayControlWdg, 0, Qt::AlignBottom);
+	layoutLeftUp->addWidget(m_pBottomExpandWdg, 0, Qt::AlignBottom);
+
+
+	layoutLeft->setMargin(0);
+	layoutLeft->setSpacing(0);
+	//layoutLeft->addWidget(widgetMinMax, 0, Qt::AlignTop);
+	layoutLeft->addWidget(m_widgetLeftUp, 1);
+	layoutLeft->addWidget(m_pSceneManagerWdg, 0, Qt::AlignBottom);
+
+	///////////////////////////////////////////////
+	//dockwidget
+
+	//画笔选择窗口，颜色选择窗口
+	m_dockShapePen = new qDockShapePen(this);
+	m_dockShapePen->hide();
+	connect(m_dockShapePen, &qDockPenChoose::penChanged, this, &videoRoom::onPenChanged);
+
+	m_dockTextPen = new qDockTextPen(this);
+	m_dockTextPen->hide();
+	connect(m_dockTextPen, &qDockPenChoose::penChanged, this, &videoRoom::onPenChanged);
+
+
+	m_dockColorPan = new qDockColorPan(this);
+	m_dockColorPan->hide();
+	connect(m_dockColorPan, &qDockColorPan::signalColorChosen, m_dockShapePen, &qDockPenChoose::slotColorChosen);
+	connect(m_dockColorPan, &qDockColorPan::signalColorChosen, m_dockTextPen, &qDockPenChoose::slotColorChosen);
+	connect(m_dockShapePen, &qDockPenChoose::signalChooseColor, m_dockColorPan, &qDockColorPan::setColor);
+	connect(m_dockTextPen, &qDockPenChoose::signalChooseColor, m_dockColorPan, &qDockColorPan::setColor);
+
+	//可能的录音悬浮窗
+	m_dockRecord = new qDockRecord(this);
+	connect(m_dockRecord, &qDockRecord::signalModify, this, &videoRoom::slotCheckCommitable);
+	connect(m_dockRecord, &qDockRecord::recordCancel, this, &videoRoom::slotRecordCancel);
+	m_dockRecord->hide();
+
+	//音量调节窗口
+	m_dockVolume = new qDockValueSlider(this);
+	connect(m_dockVolume, &qDockValueSlider::signalValueChanged, this, &videoRoom::slotVolumeChanged);
+	m_dockVolume->hide();
+
+	//鼠标悬停意见点缩略图
+	m_labelHoverPic = new QLabel(this);
+	m_labelHoverPic->setFixedSize(40, 30);
+	m_labelHoverPic->hide();
+
+	////////////////////////////////////////////////////////
+	//预览框
+	m_dlgAdvicePreview = new qDlgAdvicePreview();
+	connect(m_dlgAdvicePreview, &qDlgAdvicePreview::signalDownload, this, &videoRoom::advicePreviewDownload);
+	connect(m_dlgAdvicePreview, &qDlgAdvicePreview::signalRemove, this, &videoRoom::advicePreviewDelete);
+
+	////////////////////////////////////////////////////////
+
+	connect(m_pMinBtn, &QPushButton::clicked, this, &videoRoom::onMinBtnClicked);
+	connect(m_pMaxBtn, &QPushButton::clicked, this, &videoRoom::onMaxBtnClicked);
+	connect(m_pNormalBtn, &QPushButton::clicked, this, &videoRoom::onNormalBtnClicked);
+	connect(m_pCloseBtn, &QPushButton::clicked, this, &videoRoom::onCloseBtnClicked);
+	//connect(m_pPreTaskBtn, &QPushButton::clicked, this, &videoRoom::onPreTaskBtnClicked);
+	connect(m_pPreTaskBtn, &QPushButton::clicked, this, [=] {onPreTaskBtnClicked(); });
+
+	//connect(m_pNextTaskBtn, &QPushButton::clicked, this, &videoRoom::onNextTaskBtnClicked);
+	connect(m_pNextTaskBtn, &QPushButton::clicked, this, [=] {onNextTaskBtnClicked(); });
+	connect(m_pBottomExpandWdg, &QBottomExpandWdg::foldBtnClick, this, &videoRoom::onBewFoldBtnClick);
+	connect(m_pBottomExpandWdg, &QBottomExpandWdg::unFoldBtnClick, this, &videoRoom::onBewUnFoldBtnClick);
+	connect(m_pBottomExpandWdg, &QBottomExpandWdg::linkAllFileBtnClick, this, &videoRoom::onLinkAllFileBtnClick);
+	connect(m_pBottomExpandWdg, &QBottomExpandWdg::curTaskFileBtnClick, this, &videoRoom::onCurTaskFileBtnClick);
+	connect(m_pFoldBtn, &QPushButton::clicked,this, &videoRoom::onAdviceUnFoldBtnClick);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::unFoldBtnClick, this, &videoRoom::onAdviceFoldBtnClick);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::advicePreview, this, &videoRoom::advicePreview);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::adviceDownload, this, &videoRoom::adviceDownload);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::adviceDelete, this, &videoRoom::adviceDelete);
+	connect(m_pAdviceManager, &QAdviceManagerWdg::adviceRename, this, &videoRoom::adviceRename);
+
+	///////////////////////////////////////////////////////////////////
+	m_tipMsg = new qTipMsgDisplay(this);
+	m_tipMsg->setVisible(false);
+	m_tipMsg->setFixedSize(306,66);
+
+	//初始化编辑工具-画笔
+	m_widgetPaintArea->setPen(ITEM_BRUSH, m_mapPenInfo[ITEM_BRUSH]);
+	m_pPlayControlWdg->setEditPen(ITEM_BRUSH);
+}
+
+void videoRoom::setTitleInfo(const QString &strTaskNum,const QString &strAuthor)
+{
+	QString strShow = getMetricsText(m_pTitleLabelTaskNum, TITLEINFO_WIDTH, strTaskNum);
+	m_pTitleLabelTaskNum->setText(strShow);
+	m_pTitleLabelTaskNum->setToolTip(strTaskNum);
+
+	strShow = getMetricsText(m_pTitleLabelAuthor, TITLEINFO_WIDTH, strAuthor);
+	m_pTitleLabelAuthor->setText(strShow);
+	m_pTitleLabelAuthor->setToolTip(strAuthor);
+}
+
+void videoRoom::reSetData()
+{
+	m_bExeFinish = true;
+	m_bPassed = true;
+
+	m_bDragBeforeCtrl = false;
+	m_bScaleBeforeCtrl = false;
+	m_bTaskListIsEmpty = false;
+	m_bPressed = false;
+	m_enumLoadStage = task_loadStage;
+}
+
+void videoRoom::setProjectTaskInfo(whCloud_interface::VIDEOROOM_INTERFACE stVR)
+{
+
+	show();
+	raise();
+	activateWindow();
+
+	//QMessageBox::information(NULL, "Title", "Content", QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+
+	int editRet = slotTaskChangeCheckEdit(QStringLiteral("编辑文件未提交，是否放弃编辑并切换任务？"));
+	if (editRet < 0)
+		return;
+
+	if (stVR.nType == 1)
+		setWorkerType(WORKER_CHECKER);
+	else
+		setWorkerType(WORKER_DESIGNER);
+
+	m_widgetMovieArea->showLoading();
+
+	reSetData();
+
+	//调整界面模式
+	//m_listId = stVR.listIds;
+	m_nCurTaskId = stVR.listIds[stVR.curIdIndex];
+	
+
+	m_sceneMode = CURTASK_MODE;
+	m_pBottomExpandWdg->setSelectCurTask();
+
+	//获取oss桶路径
+	WHCLOUD_BASEURL = stVR.strBaseUrl;
+	m_strToken = stVR.strToken;
+
+	m_stVR = stVR;
+	if (m_stVR.curIdIndex == 0)
+		m_pPreTaskBtn->setEnabled(false);
+	else
+		m_pPreTaskBtn->setEnabled(true);
+
+	if (m_stVR.curIdIndex >= m_stVR.listIds.size() - 1)
+		m_pNextTaskBtn->setEnabled(false);
+	else
+		m_pNextTaskBtn->setEnabled(true);
+
+	onUpdateOssSts();
+	m_pOssStstimer->start(900 * 1000);
+
+	if (stVR.nSegment == m_nSegmentId && stVR.nProject == m_nProjectId && m_nTaskId == m_nCurTaskId)
+	{
+		loadUiData();
+		return;
+	}
+
+	m_nProjectId = stVR.nProject;
+	m_nSegmentId = stVR.nSegment;
+	m_nTaskId = m_nCurTaskId;
+
+	m_strDefScenePath = getSaveBasePath() + QString("%1/download/scene").arg(m_nCurTaskId);
+	m_strDefAdvicePath = getSaveBasePath() + QString("%1/download/advice").arg(m_nCurTaskId);
+
+	TRACELOG(LOG_INFO, "传入数据：SegmentId: %d, ProjectId %d ,token: %s", m_nSegmentId, m_nProjectId, m_strToken.toLocal8Bit().data());
+
+	loadUiData();
+	//loadAdvice();
+}
+
+videoRoom::~videoRoom()
+{
+	TRACELOG(LOG_INFO, "等待线程池退出");
+	m_threadPool.waitForDone();
+	TRACELOG(LOG_INFO, "线程池退出成功");
+	m_dlgAdvicePreview->deleteLater();
+
+	//if (m_pTipsDlg)
+	//{
+	//	delete m_pTipsDlg;
+	//	m_pTipsDlg = nullptr;
+	//}
+	//m_dockShapePen->deleteLater();
+	//m_dockTextPen->deleteLater();
+	//m_dockColorPan->deleteLater();
+	//m_dockRecord->deleteLater();
+	//m_dockVolume->deleteLater();
+
+}
+
+void videoRoom::registerSignalMetaType()
+{
+	qRegisterMetaType<PEN_INFO>("PEN_INFO");
+}
+
+void videoRoom::initAnimation()
+{
+
+}
+
+void videoRoom::loadAdviceThumPic()
+{
+	//下载右侧返修意见
+	CRequestTaskRepairFiles reqTaskRepairFiles;
+	reqTaskRepairFiles.setParam(m_nCurTaskId, m_nProjectId, m_strToken);
+	reqTaskRepairFiles.request();
+	bool bRet = reqTaskRepairFiles.getRequestState();
+	if (false == bRet)
+	{
+		TRACELOG(LOG_ERROR, "根据任务id获取返修文件列表失败 prpjectid: %d,taskid %d,", m_nProjectId, m_nCurTaskId);
+		return;
+	}
+
+	m_nTaskRepairNum = reqTaskRepairFiles.getTaskRepairNum();
+	if (m_nTaskRepairNum == 0)
+	{
+		QMessageBox::warning(0, QString::fromLatin1("videoRoom error"), tr("RepairNum = 0"));
+	}
+	QList<REPAIREFILEITEM> &lstRepair = reqTaskRepairFiles.getRepairList();
+
+	//右侧建议数据计入数据中心
+	CSingleton<CDataCenter>::GetInstance()->setTaskAdvice(m_nCurTaskId, lstRepair);
+	qSort(lstRepair.begin(), lstRepair.end(), compareFileNumber);
+
+	//QString strParentUrl = reqTaskRepairFiles.getParentUrl();
+
+	QList<REPAIREFILEITEM> &lstAdvice = CSingleton<CDataCenter>::GetInstance()->getTaskAdvice(m_nCurTaskId);
+	for (auto &it : lstAdvice)
+	{
+		if (it.repairFileUrl.isEmpty())//过滤脏数据
+		{
+			TRACELOG(LOG_WARN,"文件oss路径为空，被过滤不显示:taskid:%d, fielid：%d",m_nCurTaskId,it.repairFileId);
+			continue;
+		}
+			
+		QString strGroupName = QString(QStringLiteral("第%1次返修")).arg(it.repairNum);
+		QString strKey = it.repairFileUrl + "_" + it.soundFileUrl;
+		m_pAdviceManager->AddOneCardWdg(it.repairNum, strKey, it.soundFileUrl, it.repairFileUrl,getCardMediaType(it.soundFileUrl), CARD_STATUS::DOANLOADING_THUMPICING);
+
+		//返修次数最大值
+		//m_nTaskRepairNum = it.repairNum;
+
+		QFileInfo file(it.repairFileUrl);
+		//这里可以判断默认路径下缩略图是否存在，
+		//存在的话直接加载，无需下载
+		QString strLocalFile = /*m_strLastPath + "/" +*/getSaveBasePath() + QString("%1/download/advice/thumpic/%2").arg(m_nCurTaskId).arg(file.fileName());
+		QStringList mediaList;
+		mediaList << "mp4" << "rmvb" << "avi" << "mov"<<"mkv";
+		if (mediaList.contains(file.suffix()))
+		{
+			strLocalFile = strLocalFile + ".png";
+		}
+
+		QFileInfo file1(strLocalFile);
+		QString strThumPic = file1.absoluteFilePath();
+		if (file1.exists())
+		{
+			m_pAdviceManager->SetStatus(it.repairNum, strKey, CARD_STATUS::DOANLOADING_THUMPIC_FINISH);
+			m_pAdviceManager->updateOneCardWdg(it.repairNum, strKey, it.soundFileUrl, strThumPic, getCardMediaType(it.soundFileUrl), CARD_STATUS::DOANLOADING_THUMPIC_FINISH);
+			it.strThumPicFile = strThumPic;
+			continue;
+		}
+		else
+		{
+			QString strTmp = getIcn(it.repairFileUrl);
+			if (strTmp != PIC_ICN && \
+				strTmp != MV_ICN)
+			{
+				m_pAdviceManager->updateOneCardWdg(it.repairNum, strKey, it.soundFileUrl, strThumPic, getCardMediaType(it.soundFileUrl), CARD_STATUS::DOANLOADING_THUMPIC_FINISH);
+				it.strThumPicFile = strThumPic;
+				continue;
+			}
+		}
+
+		QString strOss = it.repairFileUrl;
+		CARD_MEDIATYPE mediaType = getCardMediaType(strOss);
+		//if (mediaType == CARD_MEDIATYPE::AUDIO||\
+		//	mediaType == CARD_MEDIATYPE::UNKNOW)
+		//{
+		//	m_pAdviceManager->SetStatus(it.repairNum, strKey, CARD_STATUS::DOANLOADING_THUMPIC_FINISH);
+		//	m_pAdviceManager->updateOneCardWdg(it.repairNum, strKey, it.soundFileUrl, strThumPic, getCardMediaType(it.soundFileUrl), CARD_STATUS::DOANLOADING_THUMPIC_FINISH);
+		//	it.strThumPicFile = strThumPic;
+		//	continue;
+		//}
+
+
+
+		STPROGRESS stProgress;
+		stProgress.projectid = m_nProjectId;
+		stProgress.segmentid = m_nSegmentId;
+		stProgress.taskid = m_nCurTaskId;
+		stProgress.cardType = CARD_TYPE::CARDTYPE_ADVICE;
+		stProgress.nRepairTimes = it.repairNum;
+		stProgress.strFileKey = strKey;
+		stProgress.cardStatus = CARD_STATUS::DOANLOADING_THUMPICING;
+		stProgress.cardMediaType = mediaType;
+
+		FilePair stFP;
+		stFP.strLocalFile = file1.absoluteFilePath();
+		stFP.strOssFile = strOss;
+		stProgress.oList.push_back(stFP);
+
+		downloadThumPic(stProgress);
+	}
+}
+
+void videoRoom::loadAdvice()
+{
+	
+	QList<REPAIREFILEITEM> &oLst = CSingleton<CDataCenter>::GetInstance()->getTaskAdvice(m_nCurTaskId);
+	for (auto &it : oLst)
+	{
+		//数据中心查对应key对应文件对
+		STADVICEDATA stAdvice;
+		stAdvice.nRepairTimes = it.repairNum;
+		stAdvice.strKey = it.repairFileUrl + "_" + it.soundFileUrl;
+		stAdvice.strPicFile = it.repairFileUrl;
+		stAdvice.strMediaFile = it.soundFileUrl;
+
+		REPAIREFILEITEM *p = (REPAIREFILEITEM *)&it;
+		if (downloadOneAdviceCard(stAdvice,m_strDefAdvicePath, p) < 0)
+			continue;
+	}
+}
+
+void videoRoom::loadSceneThumPic(qint64 nTaskId, bool bAddSceneCard /*= false*/, bool bShowSceneNum/* = false*/, bool bSwitchMode/* = false*/)
+{
+	//qint64 nTmpTaskId = nTaskId;
+	//if (-1 == CSingleton<CDataCenter>::GetInstance()->getPreTaskId(nTmpTaskId))
+	//	m_pPreTaskBtn->setEnabled(false);
+	//else
+	//	m_pPreTaskBtn->setEnabled(true);
+
+	//if (-1 == CSingleton<CDataCenter>::GetInstance()->getNextTaskId(nTmpTaskId))
+	//	m_pNextTaskBtn->setEnabled(false);
+	//else
+	//	m_pNextTaskBtn->setEnabled(true);
+
+	bool bFind = false;
+	bool bFindFile = false;
+	QList<TASK_PKG> &oLstSegment = CSingleton<CDataCenter>::GetInstance()->getSceneTaskData();
+	for (auto &it = oLstSegment.begin(); it != oLstSegment.end(); ++it)
+	{
+		if (it->taskId == nTaskId)
+		{
+			bFind = true;
+
+			if (!bSwitchMode)
+			{
+				//QString strTaskNum = QString(QStringLiteral("编号《%1》任务")).arg(it->patternNumber);
+				QString strTaskNum = QString(QStringLiteral("编号《%1》任务")).arg(m_nCurTaskId);
+				QString strAuthor = QString(QStringLiteral("制作者:%1")).arg(it->fabricantName);
+				setTitleInfo(strTaskNum, strAuthor);
+			}
+
+			//if (oLstSegment.size() > 1)
+			//	m_pNextTaskBtn->setEnabled(true);
+
+			//初始化全局TaskId
+			m_nCurTaskId = it->taskId;
+			m_strCurFileName = it->patternNumber;
+			m_strPatternNumber = it->patternNumber;
+
+			if (it->listFiles.size() == 0) //任务对应文件列表为空
+			{
+				m_widgetMovieArea->showNoVerifyFile(); //无审核文件
+				break;
+			}
+
+			for (int i = 0; i < it->listFiles.size(); i++)
+			{
+				if (i == 0 && m_nCurTaskId == m_nTaskId && !bSwitchMode) //记录第一个FileId
+				{
+					bFindFile = true;
+					m_nCurFileId = it->listFiles[i].id;
+				}
+
+				//原始图片
+				QFileInfo fileName(it->listFiles[i].fileUrl);
+				QString strOssFile = it->listFiles[i].fileUrl;
+				CARD_MEDIATYPE mediaType = getCardMediaType(strOssFile);
+				if (CARD_MEDIATYPE::AUDIO == mediaType)//音频不存在缩略图
+				{
+					continue;
+				}
+				//这里可以判断默认路径下缩略图是否存在，
+				//存在的话直接加载，无需下载
+				QString strLocalFile = getSaveBasePath() + QString("%1/download/scene/thumpic/%2").arg(it->taskId).arg(fileName.fileName());
+
+				QStringList mediaList;
+				mediaList << "mp4" << "rmvb" << "avi" << "mov"<<"mkv";
+				if (mediaList.contains(fileName.suffix()))
+				{
+					strLocalFile = strLocalFile + ".png";
+				}
+
+				if (bAddSceneCard)
+					m_pSceneManagerWdg->addOneCard(it->taskId, it->listFiles[i].id, it->patternNumber,/*"d:/1.mp4"*/strLocalFile, bShowSceneNum);
+				
+				QFileInfo file(strLocalFile);
+				if (file.exists())
+				{
+					m_pSceneManagerWdg->SetCardStatus(it->taskId, it->listFiles[i].id, DOANLOADING_THUMPIC_FINISH);
+					continue;
+				}
