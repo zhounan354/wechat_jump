@@ -1,0 +1,1500 @@
+				else
+				{
+					STPROGRESS stProgress;
+					stProgress.strOssFile = strOssFile;
+					stProgress.strLocalFile = strLocalFile;
+					stProgress.projectid = m_nProjectId;
+					stProgress.segmentid = m_nSegmentId;
+					stProgress.taskid = it->taskId;
+					stProgress.fileid = it->listFiles[i].id;
+					stProgress.cardType = CARD_TYPE::CARDTYPE_SCENE;
+					//stProgress.cardMediaType = CARD_MEDIATYPE::PIC;
+					stProgress.cardMediaType = mediaType;
+					stProgress.cardStatus = CARD_STATUS::DOANLOADING_THUMPICING;
+
+					FilePair fp;
+					fp.strLocalFile = file.absoluteFilePath();
+					fp.strOssFile = strOssFile;
+					stProgress.oList.push_back(fp);
+
+					//if (bAddSceneCard)
+					//	m_pSceneManagerWdg->addOneCard(stProgress.taskid, stProgress.fileid, it->patternNumber,/*"d:/1.mp4"*/stProgress.strLocalFile, false);
+					downloadThumPic(stProgress);
+				}
+			}
+
+			//QString strText = QString("%1/%2").arg(it->listFiles.size() > 0? 1:0).arg(it->listFiles.size());
+			//m_pBottomExpandWdg->setCurTotalInfo(strText);
+			break;
+		}
+		//加载建议
+	}
+	if (bFind == false)
+	{
+		TRACELOG(LOG_ERROR, "未查询到当前任务信息: %d", nTaskId);
+		return;
+	}
+}
+
+int videoRoom::choseDownloadDir(QString &strDownloadPath,QWidget* parent)
+{
+	QString strPath;
+	if (strDownloadPath.isEmpty())
+	{
+		strPath = QCoreApplication::applicationDirPath()+"/Temp";
+	}
+	else
+	{
+		strPath = strDownloadPath;
+	}
+
+	qWidgetPathChoose widgetChoose(parent, QStringLiteral("选择保存路径"), strPath, m_strLastPath);
+	int iRet = widgetChoose.exec();
+	if (iRet != 1)
+	{
+		return -1;
+	}
+	if (strPath.isEmpty())
+	{
+		return -1;
+	}
+
+	strDownloadPath = strPath;
+	return 0;
+}
+
+QString videoRoom::makeUniqueFileName(qint64 nTaskId, qint64 nRepairTimes, const QString &strFile)
+{
+	QVector<REPAIREFILEITEM> oVec;
+	CSingleton<CDataCenter>::GetInstance()->getAdviceFileList(nTaskId, nRepairTimes, oVec);
+
+	QFileInfo file(strFile);
+	QString strUploadFile = file.fileName();
+	QString strSuffix = file.suffix();
+	QString strBaseName = file.completeBaseName();
+	QString strPath = file.absolutePath()+"/";
+
+	QString strNewFile;
+
+	int nMax = 0;
+	for (auto &it : oVec)
+	{
+		QFileInfo file(it.repairFileUrl);
+		if (file.suffix() != strSuffix)
+			continue;
+
+		QString strBase = file.completeBaseName();
+		if (strBase == strBaseName)
+		{
+			if (nMax == 0)
+				nMax = 1;
+			continue;
+		}
+		if (strBase.startsWith(strBaseName + "_"))
+		{
+			int nNum = strBase.right(strBase.length() - strBaseName.length() - 1).toInt();
+			if (nNum != 0 && nMax <= nNum)
+				nMax = nNum + 1;
+			continue;
+		}
+	}
+
+	if (nMax == 0)
+		strNewFile = strFile;
+	else
+		strNewFile = strPath + QString("%1_%2.%3").arg(strBaseName).arg(nMax).arg(strSuffix);
+
+	return strNewFile;
+}
+
+void videoRoom::setRatioPos()
+{
+	if (m_pRatioWdg)
+	{
+		QRect rect = m_pPlayControlWdg->geometry();
+		QPoint point = m_pPlayControlWdg->pos();
+		m_pRatioWdg->move(rect.width() - 300, point.y() - 30);
+	}
+}
+
+void videoRoom::copyFileToSaveAs(QString strLocalFile, QString strSaveAsPath)
+{
+	QFileInfo file(strSaveAsPath);
+	QString strUniqueName = getUniqueFileName(file.absolutePath(),file.fileName());
+	if (QFile::copy(strLocalFile, file.absolutePath() + "/" + strUniqueName))
+	{  
+		//将文件复制到新的文件路径下
+		qDebug() << QStringLiteral("复制成功");
+	}
+	else
+	{
+		TRACELOG(LOG_ERROR, "复制文件：%s --> %s 失败", strLocalFile, strSaveAsPath);
+	}
+}
+
+void videoRoom::onOneScenceCardDoubleClick(qint64 nTaskId, qint64 nFileId,QString strFile, QPixmap & pix, qint64 nCurNum, qint64 nTotal)
+{
+	int editRet = slotTaskChangeCheckEdit(QStringLiteral("编辑文件未提交，是否放弃编辑并切换文件？"));
+	if (editRet < 0)
+	{
+		m_pSceneManagerWdg->cancelSelectedCard();
+		m_pSceneManagerWdg->setDoubleClickSelected(nTaskId, nFileId, false);
+		m_pSceneManagerWdg->setDoubleClickSelected(m_nCurTaskId, m_nCurFileId, true);
+		return;
+	}	
+
+	FILEITEM &fileItem = CSingleton<CDataCenter>::GetInstance()->getSceneTaskFileItem(nTaskId, nFileId);
+	qDebug() << "onOneScenceCardDoubleClick";
+	QString strText = QString("%1/%2").arg(nCurNum).arg(nTotal);
+	m_pBottomExpandWdg->setCurTotalInfo(strText);
+
+	m_pSceneManagerWdg->cancelSelectedCard();
+	if (m_nCurTaskId != nTaskId)
+	{
+		if (m_bExeFinish == true)
+		{
+			m_bExeFinish = false;
+		}
+		else
+		{
+			return;
+		}
+		m_nCurTaskId = nTaskId;
+		m_pAdviceManager->clearBodyWdg();
+		loadAdviceThumPic();
+
+		m_bExeFinish = true;
+	}
+	if (m_nCurFileId != nFileId)
+	{
+		//清除画板信息
+		m_widgetPaintArea->clear();
+
+		//清除录音信息
+		m_dockRecord->resetRecord();
+	}
+
+	m_nCurFileId = nFileId;
+	m_pSceneManagerWdg->setDoubleClickSelected(nTaskId, nFileId,true);
+
+	//拼接默认文件路径--检测文件本地是否已经存在
+	fileItem.localRealFilePath = "";
+	QFileInfo fileLocal(m_strDefScenePath + "/" + fileItem.fileName);
+	if (fileLocal.exists())
+	{
+		if (fileItem.fileSize == fileLocal.size() && fileItem.updateTime <= fileLocal.lastModified().toMSecsSinceEpoch())
+		{
+			fileItem.localRealFilePath = fileLocal.absoluteFilePath();
+		}
+	}
+
+	m_strFullPathFile = fileItem.localRealFilePath;
+	m_strCurFileName = fileItem.fileName;
+
+	TASK_PKG &taskInfo = CSingleton<CDataCenter>::GetInstance()->geCurTaskInfo(m_nCurTaskId);
+	QString strTaskNum = QString(QStringLiteral("编号《%1》任务")).arg(m_nCurTaskId);
+	QString strAuthor = QString(QStringLiteral("制作者:%1")).arg(taskInfo.fabricantName);
+	setTitleInfo(strTaskNum, strAuthor);
+
+	//if (-1 == CSingleton<CDataCenter>::GetInstance()->getPreTaskId(m_nCurTaskId))
+	//	m_pPreTaskBtn->setEnabled(false);
+	//else
+	//	m_pPreTaskBtn->setEnabled(true);
+
+	//if (-1 == CSingleton<CDataCenter>::GetInstance()->getNextTaskId(m_nCurTaskId))
+	//	m_pNextTaskBtn->setEnabled(false);
+	//else
+	//	m_pNextTaskBtn->setEnabled(true);
+
+
+	//打开文件
+	//首先控制栏改图标
+	m_pPlayControlWdg->openFile(pix, m_strCurFileName);
+	QStringList mediaList;
+	mediaList << "mp4" << "rmvb" << "avi" << "mov"<<"mkv";
+	//m_widgetMovieArea->initScale();
+
+	//检测文件是否在下载中
+	for (auto itVal : m_lstDownloading)
+	{
+		if (itVal == fileItem.id)
+		{
+			TRACELOG(LOG_INFO, "文件已在下载中：%s ", fileItem.fileUrl.toLocal8Bit().data());
+			m_widgetMovieArea->showLoading();
+			return;
+		}
+	}
+
+	if (mediaList.contains(QFileInfo(m_strCurFileName).suffix()))
+	{
+		m_pPlayControlWdg->setPlayMode(DISPLAY_MOVIE);
+		m_pPlayControlWdg->setPlayFile(m_strFullPathFile);
+		m_pPlayControlWdg->stopPlay(true);
+
+		setEditMovieSwitch(false, true);
+		m_pPlayControlWdg->startPlay();
+	}
+	else
+	{
+		m_pPlayControlWdg->stopPlay(false);
+		m_pPlayControlWdg->setPlayMode(DISPLAY_PIC);
+		QPixmap pix1(0,0);
+		if (m_strFullPathFile.length() != 0)
+			pix1=customLoadPix(m_strFullPathFile);
+		m_widgetPaintArea->setPicture(pix1, m_strFullPathFile, 0, m_nTaskRepairNum);
+		setEditMovieSwitch(true, true);
+	}
+
+	//判断文件本地是否存在，不存在启动下载，下载完成后自动上墙
+	if (fileItem.localRealFilePath.isEmpty())
+	{
+		//下载场景文件
+		QList<FilePair> oLst;
+		STPROGRESS stProgress;
+		if (!fileItem.fileUrl.isEmpty())//oss路径
+		{
+			QFileInfo fileLocal(m_strDefScenePath + "/" + fileItem.fileName);
+			FilePair stFP;
+			stFP.strLocalFile = fileLocal.absoluteFilePath();
+			stFP.strOssFile = fileItem.fileUrl; //oss 路径
+			oLst.push_back(stFP);
+			stProgress.cardMediaType =getCardMediaType(fileItem.fileName);
+		}
+
+		stProgress.cardType = CARD_TYPE::CARDTYPE_SCENE;
+		stProgress.cardStatus = CARD_STATUS::DOWNLOADING;
+		stProgress.projectid = m_nProjectId;
+		stProgress.segmentid = m_nSegmentId;
+		stProgress.taskid = m_nCurTaskId;
+		stProgress.fileid = fileItem.id;
+		stProgress.oList = oLst;
+		stProgress.token = m_strToken;
+		stProgress.bWillToWall = true; //下载完成需要上墙
+		m_lstDownloading.push_back(stProgress.fileid);
+
+		//置卡片状态
+		m_pSceneManagerWdg->SetCardStatus(m_nCurTaskId, fileItem.id, CARD_STATUS::DOWNLOADING);
+
+		QDownloadTask *pUploadTask = new QDownloadTask(stProgress, TransCallBack);
+		m_threadPool.start(pUploadTask);
+
+		m_widgetMovieArea->showLoading();
+		//m_pDownLoadingWdg->show(); //显示加载动图
+		return;
+	}
+}
+
+//场景卡片右键下载
+void videoRoom::onOneSceneCardDownloadRightMenuClick(qint64 nTaskId,qint64 nFileId, bool nShowChooseDir)
+{
+	if (nShowChooseDir)
+	{
+		if (0 != choseDownloadDir(m_strLastPath, this))
+			return;
+	}
+
+	//这里要判断是否是另存为
+	bool bSaveAs = false;
+	if (0 == m_strLastPath.compare(m_strDefScenePath)) //0 =
+	{
+		qDebug() << "默认路径缓存";
+	}
+	else
+	{
+		bSaveAs = true; //表示另存为
+	}
+
+	loadSceneThumPic(m_nCurTaskId,false,false);
+
+	qDebug() << "onOneSceneCardDownloadRightMenuClick";
+	QMap<qint64, QList<qint64>> oMap;
+	m_pSceneManagerWdg->getSelectedCard(oMap);
+	for (auto it = oMap.begin();it != oMap.end();++it)
+	{
+		for (auto itLst = it.value().begin();itLst != it.value().end();++itLst)
+		{
+			FILEITEM taskFileItem = CSingleton<CDataCenter>::GetInstance()->getSceneTaskFileItem(it.key(), *itLst);
+			//检测文件是否在下载中
+			bool bDowloading = false;
+			for (auto itVal : m_lstDownloading)
+			{
+				if (itVal == taskFileItem.id)
+				{
+					TRACELOG(LOG_INFO, "文件正在下载中：%s ", taskFileItem.fileUrl.toLocal8Bit().data());
+					showTip(QStringLiteral("文件正在下载中"));
+					/*qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("文件正在下载中"), \
+						QSize(60, 30), QStringLiteral("确定"), 1, "", 0, "", true);
+					messageSure.exec();*/
+					bDowloading = true;
+					break;
+				}
+			}
+			if (bDowloading)
+			{
+				continue;
+			}
+
+			taskFileItem.fileName;
+			QString strLocalPath = m_strDefScenePath/*m_strLastPath*/;
+			if (createDir(strLocalPath) < 0)
+			{
+				TRACELOG(LOG_ERROR, "创建下载文件目录失败, %s", strLocalPath.toLocal8Bit().data());
+				return;
+			}
+
+			//下载场景文件
+			QList<FilePair> oLst;
+			STPROGRESS stProgress;
+			if (!taskFileItem.fileUrl.isEmpty())//oss路径
+			{
+				QFileInfo fileLocal(strLocalPath + "/" + taskFileItem.fileName);
+				FilePair stFP;
+				stFP.strLocalFile = fileLocal.absoluteFilePath();
+				stFP.strOssFile = taskFileItem.fileUrl; //oss 路径
+				if (bSaveAs)
+					stFP.strSaveAsPath = m_strLastPath + "/" + taskFileItem.fileName;
+
+				oLst.push_back(stFP);
+				stProgress.cardMediaType = _CARD_MEDIATYPE::PIC;
+
+				//判断文件是否需要下载
+				QFileInfo file1(stFP.strLocalFile);
+				if (file1.exists() && (file1.lastModified().toMSecsSinceEpoch() >= taskFileItem.updateTime &&
+					file1.size() == taskFileItem.fileSize))
+				{
+					//复制文件到另存为目录下
+					if (bSaveAs)
+						copyFileToSaveAs(stFP.strLocalFile, stFP.strSaveAsPath);
+
+					break;
+				}
+			}
+
+			stProgress.cardType = CARD_TYPE::CARDTYPE_SCENE;
+			stProgress.cardStatus = CARD_STATUS::DOWNLOADING;
+			stProgress.projectid = m_nProjectId;
+			stProgress.segmentid = m_nSegmentId;
+			stProgress.taskid = it.key();
+			stProgress.fileid = taskFileItem.id;
+			stProgress.oList = oLst;
+			stProgress.token = m_strToken;
+			if (nShowChooseDir == false)
+			{
+				stProgress.bWillToWall = true; //下载完成需要上墙
+			}
+			m_lstDownloading.push_back(stProgress.fileid);
+
+			//置卡片状态
+			m_pSceneManagerWdg->SetCardStatus(it.key(), taskFileItem.id, CARD_STATUS::DOWNLOADING);
+
+			QDownloadTask *pUploadTask = new QDownloadTask(stProgress, TransCallBack);
+			m_threadPool.start(pUploadTask);
+		}
+	}
+}
+
+//场景卡片右键下载
+int  videoRoom::AutoDownloadFirstSceneCardFile(qint64 nTaskId, qint64 nFileId, bool nShowChooseDir)
+{
+	QString strScenePath = m_strDefScenePath;
+	if (nShowChooseDir)
+	{
+		strScenePath = m_strLastPath;
+		if (0 != choseDownloadDir(m_strLastPath, this))
+			return 0;
+	}
+	else
+	{
+		loadSceneThumPic(m_nCurTaskId, false, false);
+	}
+
+	qDebug() << "AutoDownloadFirstSceneCardFile";
+	QMap<qint64, QList<qint64>> oMap;
+	m_pSceneManagerWdg->getSelectedCard(oMap);
+	for (auto it = oMap.begin(); it != oMap.end(); ++it)
+	{
+		for (auto itLst = it.value().begin(); itLst != it.value().end(); ++itLst)
+		{
+			FILEITEM &taskFileItem = CSingleton<CDataCenter>::GetInstance()->getSceneTaskFileItem(it.key(), *itLst);
+			//检测文件是否在下载中
+			for (auto itVal : m_lstDownloading)
+			{
+				if (itVal == taskFileItem.id)
+				{
+					TRACELOG(LOG_INFO, "文件正在下载中：%s ", taskFileItem.fileUrl.toLocal8Bit().data());
+					//showTip(QStringLiteral("文件正在下载中"));
+					/*qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("文件正在下载中"), \
+						QSize(60, 30), QStringLiteral("确定"), 1, "", 0, "", true);
+					messageSure.exec();*/
+					continue;;
+				}
+			}
+
+
+			QString strLocalPath = strScenePath;
+			if (createDir(strLocalPath) < 0)
+			{
+				TRACELOG(LOG_ERROR, "创建下载文件目录失败, %s", strLocalPath.toLocal8Bit().data());
+				return LOCAL_EXSIST;
+			}
+
+			//下载场景文件
+			QList<FilePair> oLst;
+			STPROGRESS stProgress;
+			if (!taskFileItem.fileUrl.isEmpty())//oss路径
+			{
+				QFileInfo fileLocal(strLocalPath + "/" + taskFileItem.fileName);
+				if (fileLocal.exists())
+				{
+					qDebug() << "文件已经存在";
+					taskFileItem.localRealFilePath = fileLocal.absoluteFilePath();
+					return LOCAL_EXSIST;
+				}
+
+				FilePair stFP;
+				stFP.strLocalFile = fileLocal.absoluteFilePath();
+				stFP.strOssFile = taskFileItem.fileUrl; //oss 路径
+				oLst.push_back(stFP);
+				stProgress.cardMediaType = _CARD_MEDIATYPE::PIC;
+			}
+
+			stProgress.cardType = CARD_TYPE::CARDTYPE_SCENE;
+			stProgress.cardStatus = CARD_STATUS::DOWNLOADING;
+			stProgress.projectid = m_nProjectId;
+			stProgress.segmentid = m_nSegmentId;
+			stProgress.taskid = it.key();
+			stProgress.fileid = taskFileItem.id;
+			stProgress.oList = oLst;
+			stProgress.token = m_strToken;
+			stProgress.bWillToWall = true; //下载完成需要上墙
+
+			m_lstDownloading.push_back(taskFileItem.id);
+
+			//置卡片状态
+			m_pSceneManagerWdg->SetCardStatus(it.key(), taskFileItem.id, CARD_STATUS::DOWNLOADING);
+
+			QDownloadTask *pUploadTask = new QDownloadTask(stProgress, TransCallBack);
+			m_threadPool.start(pUploadTask);
+
+		}
+	}
+	return LOCAL_NOEXSIST;
+}
+
+void videoRoom::onGroupPlayAudio(int nRepairTimes, QString strKey)
+{
+	qDebug() << "onGroupPlayAudio";
+}
+
+void videoRoom::onGroupPlayVideo(int nRepairTimes, QString strKey)
+{
+	qDebug() << "onGroupPlayVideo";
+}
+
+void videoRoom::onGroupRedoUpload(int nRepairTimes, QString strKey)
+{
+	qDebug() << "onGroupRedoUpload";
+
+	STADVICEDATA stAdvice;
+	m_pAdviceManager->GetCheckCard(nRepairTimes, strKey,stAdvice);
+
+	if (uploadOneAdviceCard(stAdvice) < 0)
+		TRACELOG(LOG_ERROR, "redoupoload prepareupload failed!");
+}
+
+void videoRoom::onGroupRedoDownload(int nRepairTimes, QString strKey)
+{
+	qDebug() << "onGroupRedoDownload";
+	STADVICEDATA stAdvice;
+	m_pAdviceManager->GetCheckCard(nRepairTimes, strKey, stAdvice);
+
+	//数据中心查对应key对应文件对
+	REPAIREFILEITEM &itRepairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(m_nCurTaskId, nRepairTimes, strKey);
+	//STADVICEDATA stAdvice;
+	stAdvice.nRepairTimes = itRepairItem.repairNum;
+	stAdvice.strKey = strKey;
+	stAdvice.strPicFile = itRepairItem.repairFileUrl;
+	stAdvice.strMediaFile = itRepairItem.soundFileUrl;
+
+	downloadOneAdviceCard(stAdvice,m_strLastPath, &itRepairItem);
+}
+
+void videoRoom::onHoverOneAdviceCard(int nRepairTimes, QString strKey, QPoint cardPoint)
+{
+	if (!this->isActiveWindow())
+		return;
+	qDebug() << "onHoverOneAdviceCard";
+	//QPoint point = QCursor::pos();
+	//QPoint point1 = QCursor::pos();
+
+	//QPoint point = event->globalPos();
+	//QPoint pointRelative = point1 - mapToGlobal(QPoint(0, 0));
+
+	REPAIREFILEITEM repairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(m_nCurTaskId, nRepairTimes, strKey);
+	if (repairItem.fileName.length() == 0)
+	{
+		m_pTipsDlg->setFileName(QStringLiteral("上传中..."));
+		m_pTipsDlg->setFileSize("");
+		m_pTipsDlg->setCreateTime("");
+	}
+	else
+	{
+		m_pTipsDlg->setFileName(repairItem.fileName);
+		if (!repairItem.soundFileUrl.isEmpty())
+		{
+			m_pTipsDlg->setFileSize(QStringLiteral("文件大小：") + repairItem.strSoundFileSize);
+			m_pTipsDlg->setCreateTime(QStringLiteral("创建时间：") + repairItem.strSoundLlastModifyTime);
+		}
+		else
+		{
+			m_pTipsDlg->setFileSize(QStringLiteral("文件大小：") + repairItem.strFileSize);
+			m_pTipsDlg->setCreateTime(QStringLiteral("创建时间：") + repairItem.strLastModifyTime);
+		}
+	}
+	
+	m_pTipsDlg->show();
+
+	//获取可用桌面大小
+	QDesktopWidget* desktopWidget = QApplication::desktop();
+	QRect deskRect = desktopWidget->screenGeometry(cardPoint);
+
+	if (cardPoint.y() > mapToGlobal(m_pAdviceManager->pos()).y()+m_pAdviceManager->height()-120)
+	{
+		cardPoint.setY(cardPoint.y() - 130 - m_pTipsDlg->height());
+	}
+
+	if (cardPoint.x() + m_pTipsDlg->width() > deskRect.right())
+	{
+		cardPoint.setX(deskRect.right()- m_pTipsDlg->width()-10);
+	}
+
+	m_pTipsDlg->move(cardPoint);
+}
+
+void videoRoom::onLeaveHoverOneAdviceCard(int nRepairTimes, QString strKey)
+{
+	m_pTipsDlg->hide();
+}
+
+void videoRoom::advicePreview(int nRepairTimes, QString strKey)
+{
+	qDebug() << "advicePreview";
+
+	if (strKey.endsWith('_'))
+	{
+		QString strSuffix = QFileInfo(strKey).suffix();
+		strSuffix = strSuffix.left(strSuffix.length() - 1);
+		if (!m_dlgAdvicePreview->m_listSuportFile.contains(strSuffix))
+		{
+			qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("暂只支持预览图片或视频文件"), QSize(60, 30), QStringLiteral("确定"), 1, "");
+			messageSure.exec();
+			return;
+		}
+	}
+
+
+	m_dlgAdvicePreview->setAdviceInfo(m_nCurTaskId,nRepairTimes, strKey);
+	m_dlgAdvicePreview->onNormalBtnClicked();
+	m_dlgAdvicePreview->show();
+	m_dlgAdvicePreview->activateWindow();
+	m_dlgAdvicePreview->raise();
+}
+
+void videoRoom::adviceDownload(int nRepairTimes, QString strKey)
+{
+	qDebug() << "adviceDownload";
+	QMap<int, QVector<STADVICEDATA>> oMap;
+	m_pAdviceManager->GetCheckGroup(oMap);
+	if (0 != choseDownloadDir(m_strLastPath,this))
+		return;
+
+	for (auto &itVec : oMap)
+	{
+		for (auto &it : itVec)
+		{
+			//数据中心查对应key对应文件对
+			REPAIREFILEITEM &itRepairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(m_nCurTaskId, it.nRepairTimes, it.strKey);
+			STADVICEDATA stAdvice;
+			stAdvice.nRepairTimes = itRepairItem.repairNum;
+			stAdvice.strKey = it.strKey;
+			stAdvice.strPicFile = itRepairItem.repairFileUrl;
+			stAdvice.strMediaFile = itRepairItem.soundFileUrl;
+
+			if (downloadOneAdviceCard(stAdvice,m_strLastPath, &itRepairItem) < 0)
+				continue;
+		}
+	}
+}
+
+void videoRoom::advicePreviewDownload(int nRepairTimes, int nTaskId, QString strKey, QWidget* parent,bool bChosePath)
+{
+	qDebug() << "adviceDownload";
+
+	//数据中心查对应key对应文件对
+	REPAIREFILEITEM &itRepairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(nTaskId, nRepairTimes, strKey);
+	STADVICEDATA stAdvice;
+	stAdvice.nRepairTimes = itRepairItem.repairNum;
+	stAdvice.strKey = strKey;
+	stAdvice.strPicFile = itRepairItem.repairFileUrl;
+	stAdvice.strMediaFile = itRepairItem.soundFileUrl;
+
+	QString strLocalPath = m_strDefAdvicePath;
+	if (bChosePath)
+	{
+		strLocalPath = m_strLastPath;
+		if (0 != choseDownloadDir(strLocalPath, parent))
+			return;
+	}
+
+	downloadOneAdviceCard(stAdvice, strLocalPath, &itRepairItem, PREVIEW_DOWNLOAD);
+}
+
+void videoRoom::adviceDelete(int nRepairTimes, QString strKey)
+{
+	qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("请确定是否删除已选文件？"));
+	int nRet = messageSure.exec();
+	if (nRet == 0)
+	{
+		//放弃
+		return;
+	}
+
+	QMap<int, QVector<STADVICEDATA>> oMap;
+	m_pAdviceManager->GetCheckGroup(oMap);
+
+	QVector<qint64> oVec;
+	for (auto &itVec : oMap)
+	{
+		for (auto &it : itVec)
+		{
+			//数据中心查对应key对应文件对
+			REPAIREFILEITEM &itRepairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(m_nCurTaskId, it.nRepairTimes, it.strKey);
+			oVec.push_back(itRepairItem.repairFileId);
+
+			CRequestDeleteRepairFiles reqDelRepairFiles;
+			reqDelRepairFiles.setParam(m_nCurTaskId, oVec, m_strToken);
+			reqDelRepairFiles.request();
+			if (false == reqDelRepairFiles.getRequestState())
+			{
+				TRACELOG(LOG_ERROR, "请求删除返修文件失败");
+			}
+			else
+			{
+				TRACELOG(LOG_INFO, "请求删除返修文件成功");
+				m_pAdviceManager->delOneAdviceCard(it.nRepairTimes, it.strKey);
+				CSingleton<CDataCenter>::GetInstance()->removeAdviceFileItem(m_nCurTaskId, it.nRepairTimes, it.strKey);
+				m_pPlayControlWdg->removeAdvicePoint(it.strPicFile);
+			}
+		}
+	}
+
+	if (m_dlgAdvicePreview->isVisible())
+	{
+		m_dlgAdvicePreview->updateAdvice();
+	}
+
+}
+
+void videoRoom::advicePreviewDelete(int nRepairTimes, int nTaskId, QString strPic, QString strKey, QWidget* parent)
+{
+	//先判断当前返修次数文件个数
+	bool bLastFileFlg = false;
+	QVector<REPAIREFILEITEM> oVec;
+	CSingleton<CDataCenter>::GetInstance()->getAdviceFileList(nTaskId, nRepairTimes, oVec);
+	if (oVec.size() == 1)
+	{
+		qWidgetMessageSure messageSure(parent, QStringLiteral("提示"), QStringLiteral("唯一文件删除后将关闭预览窗"));
+		int nRet = messageSure.exec();
+		if (nRet == 0)
+		{
+			//放弃
+			return;
+		}
+		bLastFileFlg = true;
+	}
+
+	if (!bLastFileFlg)
+	{
+		qWidgetMessageSure messageSure(parent, QStringLiteral("提示"), QStringLiteral("请确定是否删除当前文件？"));
+		int nRet = messageSure.exec();
+		if (nRet == 0)
+		{
+			//放弃
+			return;
+		}
+	}
+
+	QVector<qint64> oVec1;
+
+	//数据中心查对应key对应文件对
+	REPAIREFILEITEM &itRepairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(nTaskId, nRepairTimes, strKey);
+	oVec1.push_back(itRepairItem.repairFileId);
+
+	CRequestDeleteRepairFiles reqDelRepairFiles;
+	reqDelRepairFiles.setParam(nTaskId, oVec1, m_strToken);
+	reqDelRepairFiles.request();
+	if (false == reqDelRepairFiles.getRequestState())
+	{
+		TRACELOG(LOG_ERROR, "请求删除返修文件失败");
+	}
+	else
+	{
+		TRACELOG(LOG_INFO, "请求删除返修文件成功");
+		m_pAdviceManager->delOneAdviceCard(nRepairTimes, strKey);
+		CSingleton<CDataCenter>::GetInstance()->removeAdviceFileItem(nTaskId, nRepairTimes, strKey);
+		m_pPlayControlWdg->removeAdvicePoint(strPic);
+	}
+
+	m_dlgAdvicePreview->updateAdvice();
+}
+
+void videoRoom::adviceRename(int nRepairTimes, QString strKey)
+{
+	qDebug() << "adviceRename";
+}
+
+void videoRoom::onUploadAdviceBtnClick()
+{
+	if (m_bTaskListIsEmpty)
+		return;
+	//括号里的参数分别是：指定父类、标题、默认打开后显示的目录、右下角的文件过滤器。
+	QStringList listFileName = QFileDialog::getOpenFileNames(NULL, QStringLiteral("选择上传文件"), ".", "*.*");
+
+	m_mutxClickBtn.lock();
+	QVector<STADVICEDATA> oVec;
+	for (QString strFileName : listFileName)
+	{
+		QString strUniqueFileNa = makeUniqueFileName(m_nCurTaskId,m_nTaskRepairNum,strFileName);
+		//这里先添加上传文件到数据中心，目的是为了提早检测文件同名问题
+
+		REPAIREFILEITEM fileItem;
+		fileItem.repairNum = m_nTaskRepairNum;
+		fileItem.repairFileUrl = strUniqueFileNa; //本地文件名，非oss路径
+		CSingleton<CDataCenter>::GetInstance()->addAdviceLocalFile(m_nCurTaskId, fileItem);
+
+		
+		QString strMediaFile = "";
+		QString strKey = strUniqueFileNa + "_" + strMediaFile;
+		//添加录音到建议栏
+		//QString strAdviceNum = QString(QStringLiteral("第%1次返修")).arg(m_nMaxAdviceNum +1);
+
+		//启动上传
+		STADVICEDATA stAdvice;
+		stAdvice.nRepairTimes = m_nTaskRepairNum;
+		stAdvice.strKey = strKey;
+		stAdvice.strMediaFile = strMediaFile;
+		stAdvice.strPicFile = strFileName;
+		stAdvice.strBuckName = strUniqueFileNa;
+		oVec.push_back(stAdvice);
+		//uploadOneAdviceCard(stAdvice);
+	}
+	m_mutxClickBtn.unlock();
+
+	for (auto advice : oVec)
+	{
+		uploadOneAdviceCard(advice);
+	}
+}
+
+int videoRoom::downloadOneAdviceCard(STADVICEDATA &stAdvice, const QString &strDownloadPath, REPAIREFILEITEM *pFileItem /*= nullptr*/,int nDownloadType /*= 0*/)
+{
+	//下载路径拼接规则
+	//QString strLocalPath = m_strLastPath + "/" + QString("%1/%2/%3/%4/download/advice/%5").arg(m_nProjectId).arg(m_nSubProjectId).\
+	//	arg(m_nSegmentId).arg(m_nCurTaskId).arg(stAdvice.nRepairTimes);
+
+	//这里要判断是否是另存为
+	bool bSaveAs = false;
+	if (0 == strDownloadPath.compare(m_strDefAdvicePath) ) //0 =
+	{
+		qDebug() << "默认路径缓存";
+	}
+	else
+	{
+		bSaveAs = true; //表示另存为
+	}
+
+	//QString strLocalPath = strDownloadPath + "/" + QString::number(stAdvice.nRepairTimes);
+	QString strLocalPath = m_strDefAdvicePath + "/" + QString::number(stAdvice.nRepairTimes);
+	if (createDir(strLocalPath) < 0)
+	{
+		TRACELOG(LOG_ERROR, "创建下载文件目录失败, %s", strLocalPath.toLocal8Bit().data());
+		return -1;
+	}
+
+	QList<FilePair> oLst;
+	FilePair fp;
+
+	//下载文件
+	bool bFileExist = false;
+	STPROGRESS stProgress;
+	if (!stAdvice.strPicFile.isEmpty())//oss路径
+	{
+		QFileInfo file(stAdvice.strPicFile);
+		QFileInfo fileLocal(strLocalPath + "/" + file.fileName());
+		fp.strLocalFile = fileLocal.absoluteFilePath();
+		fp.strOssFile = stAdvice.strPicFile; //oss 路径
+		if (bSaveAs)
+			fp.strSaveAsPath = strDownloadPath + "/" + file.fileName();
+
+		oLst.push_back(fp);
+		stProgress.cardMediaType = _CARD_MEDIATYPE::PIC;
+
+		QFileInfo file1(fp.strLocalFile); //fp.strLocalFile 目录是用户选择的目录
+		if (file1.exists() && (file1.lastModified().toMSecsSinceEpoch() >= pFileItem->lastModifyTime &&
+			file1.size() == pFileItem->nfileSize)) //说明本地有
+		{
+			if (pFileItem)
+				pFileItem->strLocalRepairFile = fp.strLocalFile;
+
+			bFileExist = true;
+			//复制文件到另存为目录下
+			if (bSaveAs)
+				copyFileToSaveAs(fp.strLocalFile, fp.strSaveAsPath);
+		}
+	}
+
+	if (!stAdvice.strMediaFile.isEmpty())//oss路径
+	{
+		QFileInfo file(stAdvice.strMediaFile);
+		QFileInfo fileLocal(strLocalPath + "/" + file.fileName());
+		fp.strLocalFile = fileLocal.absoluteFilePath();
+		fp.strOssFile = stAdvice.strMediaFile; //oss 路径
+		if (bSaveAs)
+			fp.strSaveAsPath = strDownloadPath + "/" + file.fileName();
+
+		oLst.push_back(fp);
+		stProgress.cardMediaType = _CARD_MEDIATYPE::AUDIO;
+
+		//判断文件是否需要下载
+		QFileInfo file1(fp.strLocalFile);
+		if (file1.exists() && (file1.lastModified().toMSecsSinceEpoch() >= pFileItem->soundLlastModifyTime &&
+			file1.size() == pFileItem->nSoundfileSize))
+		{
+			if (pFileItem)
+				pFileItem->strLocalMediaFile = fp.strLocalFile;
+			bFileExist = true;
+			
+			//复制文件到另存为目录下
+			if (bSaveAs)
+				copyFileToSaveAs(fp.strLocalFile, fp.strSaveAsPath);
+		}
+		else
+		{
+			bFileExist = false;
+		}
+	}
+
+	if (bFileExist == true) //说明已经下载到本地
+	{
+		m_dlgAdvicePreview->updateAdvice();
+		return 0;
+	}
+
+	//检测文件是否在下载中
+	for (auto itVal : m_lstDownloading)
+	{
+		if ((pFileItem != nullptr) && 
+			(itVal == pFileItem->repairFileId))
+		{
+			TRACELOG(LOG_INFO, "文件已在下载中：%s ", pFileItem->repairFileUrl.toLocal8Bit().data());
+			if (nDownloadType != PREVIEW_DOWNLOAD)
+			{
+				m_widgetMovieArea->showLoading();
+			}
+			return 0;
+		}
+	}
+
+	if (pFileItem)
+		m_lstDownloading.push_back(pFileItem->repairFileId);
+
+	stProgress.cardType = CARD_TYPE::CARDTYPE_ADVICE;
+	stProgress.cardStatus = CARD_STATUS::DOWNLOADING;
+	stProgress.projectid = m_nProjectId;
+	stProgress.segmentid = m_nSegmentId;
+	stProgress.taskid = m_nCurTaskId;
+	stProgress.nRepairTimes = stAdvice.nRepairTimes; //后面要修改，第几次返修
+	stProgress.strFileKey = stAdvice.strKey;
+	stProgress.oList = oLst;
+	stProgress.token = m_strToken;
+
+	//置卡片状态
+	m_pAdviceManager->SetStatus(stProgress.nRepairTimes, stProgress.strFileKey, CARD_STATUS::DOWNLOADING);
+
+	QDownloadTask *pUploadTask = new QDownloadTask(stProgress, TransCallBack);
+	m_threadPool.start(pUploadTask);
+
+	return 0;
+}
+
+void videoRoom::loadUiData()
+{
+	//Sleep(10000);
+
+	m_pPlayControlWdg->openFile(QPixmap(DEFAULT_PIC), "");
+	m_pBottomExpandWdg->enableComb(false);
+
+	RequestGetTaskFileListEx requestGetTaskFileListEx;
+	requestGetTaskFileListEx.setParam(m_nProjectId, m_strToken, m_nTaskId);
+	requestGetTaskFileListEx.request();
+
+	if (false == requestGetTaskFileListEx.getRequestState())
+	{
+		TRACELOG(LOG_ERROR, "CRequestTaskFileList failed,errState: %d errMsg: %s", requestGetTaskFileListEx.getRequestState(), \
+			requestGetTaskFileListEx.getErrMessage().toLocal8Bit().data());
+
+		m_widgetMovieArea->showLoadFailed();
+		return;
+	}
+
+	//如下进入文件加载阶段
+	m_enumLoadStage = file_loadStage;
+
+	//数据中心保存数据
+	CSingleton<CDataCenter>::GetInstance()->setParam(m_nProjectId, 0, m_nSegmentId);
+	CSingleton<CDataCenter>::GetInstance()->setSceneTaskData(requestGetTaskFileListEx.getTaskList());
+	if (requestGetTaskFileListEx.getTaskList().size() == 0)
+	{
+		TRACELOG(LOG_ERROR, "查询到任务列表为空，不应该出现，服务端排查");
+		m_widgetMovieArea->showNoVerifyFile();
+		m_pBottomExpandWdg->enableComb(true);
+		return;
+	}
+
+	m_pBottomExpandWdg->setBtnVisable(requestGetTaskFileListEx.getAllShowBool());
+
+	m_pSceneManagerWdg->clearAllCard();
+	m_pAdviceManager->clearBodyWdg();
+
+	//m_widgetMovieArea->showLoading();
+	//m_pDownLoadingWdg->show();
+	loadSceneThumPic(m_nCurTaskId, true, false);
+
+	m_pSceneManagerWdg->setSelected(m_nCurTaskId, m_nCurFileId, true);
+	m_pSceneManagerWdg->setDoubleClickSelected(m_nCurTaskId, m_nCurFileId, true);
+	//onOneSceneCardDownloadRightMenuClick(m_nCurTaskId, m_nCurFileId, false);
+	int nRet = AutoDownloadFirstSceneCardFile(m_nCurTaskId, m_nCurFileId);
+	m_pSceneManagerWdg->setSelected(m_nCurTaskId, m_nCurFileId, false);
+	bool bDownloading = false;
+	if (nRet == LOCAL_EXSIST)
+	{
+		loadAdviceThumPic();
+		//loadAdvice();
+		m_widgetMovieArea->finishLoading();
+		//m_pDownLoadingWdg->hide();
+		m_widgetMovieArea->initScale();
+		m_pSceneManagerWdg->produceOneSceneCardDoubleClick(m_nCurTaskId, m_nCurFileId);
+		m_pBottomExpandWdg->enableComb(true);
+		return;
+	}
+
+	loadAdviceThumPic();
+	m_pPlayControlWdg->stopPlay(false);
+	m_pPlayControlWdg->setPlayMode(DISPLAY_PIC);
+	QPixmap pix1(0, 0);
+	if (m_strFullPathFile.length() != 0)
+		pix1=customLoadPix(m_strFullPathFile);
+	m_widgetPaintArea->setPicture(pix1, m_strFullPathFile, 0, m_nTaskRepairNum);
+	//setEditMovieSwitch(true);
+	m_pBottomExpandWdg->enableComb(true);
+}
+
+void videoRoom::showProcessIng(bool bShow)
+{
+	QRect rect = this->geometry();
+	QRect rc = m_pWaitingWdg->geometry();
+	if (bShow)
+		m_pWaitingWdg->show();
+	else
+		m_pWaitingWdg->hide();
+
+	m_pWaitingWdg->move(rect.x() + (rect.width() - rc.width()) / 2, rect.y() + (rect.height() - rc.height()) / 2);
+	return;
+}
+
+void videoRoom::setWorkerType(emWorkerType nType)
+{
+	m_emWorkerType = nType;
+	switch (m_emWorkerType)
+	{
+	case WORKER_CHECKER:
+		setCheckerBtnVisable(true);
+		break;
+	case WORKER_DESIGNER:
+		setCheckerBtnVisable(false);
+		break;
+	default:
+		break;
+	}
+	CSingleton<CDataCenter>::GetInstance()->setWorkerType(nType);
+}
+
+void videoRoom::setCheckerBtnVisable(bool b)
+{
+	m_pPlayControlWdg->setCheckerBtnVisable(b);
+	m_pAdviceManager->setCheckerBtnVisable(b);
+
+	//m_pFoldBtn->setVisible(true);
+	//m_pAdviceManager->setFixedWidth(ADVICE_WIDTH);
+}
+
+void videoRoom::setBottomInfo()
+{
+	if (m_nCurFileId == -1)
+	{
+		TASK_PKG &itTaskItem = CSingleton<CDataCenter>::GetInstance()->geCurTaskInfo(m_nCurTaskId);
+		QString strTaskNum = QString(QStringLiteral("编号《%1》任务")).arg(m_nCurTaskId);
+		QString strAuthor = QString(QStringLiteral("制作者:%1")).arg(itTaskItem.fabricantName);
+		setTitleInfo(strTaskNum, strAuthor);
+		m_pBottomExpandWdg->setCurTotalInfo("0/0");
+	}
+}
+
+int videoRoom::uploadOneAdviceCard(STADVICEDATA &stAdvice)
+{
+	QList<FilePair> oLst;
+	// list[0]=pic,list[1]=media
+
+	if (!stAdvice.strPicFile.isEmpty())
+	{
+		QString strFile = (stAdvice.strBuckName == "" ? stAdvice.strPicFile: stAdvice.strBuckName);
+		QString strUploadDir;
+		if (prepareUpload(strFile, stAdvice.nRepairTimes, strUploadDir) < 0)
+		{
+			TRACELOG(LOG_ERROR,"prepareUpload failed! %s,%d,%s", strFile.toLocal8Bit().data(),\
+				stAdvice.nRepairTimes, strUploadDir.toLocal8Bit().data());
+			return -1;
+
+		}
+
+		QFileInfo file(strFile);
+		FilePair fp;
+		fp.strLocalFile = stAdvice.strPicFile;
+		fp.strBuckName = stAdvice.strBuckName;
+		fp.strOssFile = strUploadDir + file.fileName();
+		oLst.push_back(fp);
+
+		TRACELOG(LOG_INFO, "文件：%s", strFile.toLocal8Bit().data());
+	}
+	else
+	{
+		TRACELOG(LOG_ERROR, "图片文件不存在，不允许上传！");
+		return -2;
+	}
+
+	if (!stAdvice.strMediaFile.isEmpty())
+	{
+		QString strUploadDir;
+		if (prepareUpload(stAdvice.strMediaFile, stAdvice.nRepairTimes,strUploadDir) < 0)
+			return -1;
+
+		QFileInfo file(stAdvice.strMediaFile);
+		FilePair fp;
+		fp.strLocalFile = stAdvice.strMediaFile;
+		fp.strOssFile = strUploadDir + file.fileName();
+		oLst.push_back(fp);
+	}
+	else
+	{
+		FilePair fp;
+		fp.strLocalFile = "";
+		fp.strOssFile = "";
+		oLst.push_back(fp);
+	}
+
+	//后面加文件类型识别--------
+	QString strKey = oLst[0].strOssFile + "_" + (oLst.size() > 1 ? oLst[1].strOssFile:"");
+	if (!oLst[0].strOssFile.isEmpty())
+	{
+		QString strFile = (oLst[0].strBuckName == "" ? oLst[0].strLocalFile : oLst[0].strBuckName);
+		QString strMideaFIle = (oLst.size() > 1 ? oLst[1].strLocalFile : "");
+		m_pAdviceManager->AddOneCardWdg(m_nTaskRepairNum, strKey, strMideaFIle, strFile, getCardMediaType(strMideaFIle), CARD_STATUS::UPLOADING);
+		
+		TRACELOG(LOG_INFO, "添加建议卡片1，参数为：返修次数：%d 媒体文件：%s 图片文件：%s", m_nTaskRepairNum, strMideaFIle.toLocal8Bit().data(), strFile.toLocal8Bit().data());
+		//目的是更新图标
+		//m_pAdviceManager->updateOneCardWdg(m_nTaskRepairNum, strKey, strMideaFIle, getIcn(strFile), getCardMediaType(strMideaFIle), CARD_STATUS::UPLOADING);
+	}
+
+	//上传文件
+	STPROGRESS stProgress;
+	stProgress.cardType = CARD_TYPE::CARDTYPE_ADVICE;
+	stProgress.projectid = m_nProjectId;
+	stProgress.segmentid = m_nSegmentId;
+	stProgress.taskid = m_nCurTaskId;
+	stProgress.nRepairTimes = stAdvice.nRepairTimes; //后面要修改，第几次返修
+	//stProgress.strOssFile = strUploadDir + file.fileName();
+	//stProgress.strLocalFile = strFile;
+	stProgress.strFileKey = strKey;
+	stProgress.oList = oLst;
+	stProgress.token = m_strToken;
+	stProgress.cardStatus = CARD_STATUS::NOSTART;
+	stProgress.cardType = CARD_TYPE::CARDTYPE_ADVICE;
+
+	TRACELOG(LOG_INFO, "添加提交返修建议文件任务", oLst[0].strOssFile.toLocal8Bit().data());
+	QUploadTask *pUploadTask = new QUploadTask(stProgress, TransCallBack);
+	m_threadPool.start(pUploadTask);
+
+	return 0;
+}
+
+//下载返修文件
+void videoRoom::onDownloadAdviceBtnClick()
+{
+	if (m_bTaskListIsEmpty)
+		return;
+
+	QMap<int, QVector<STADVICEDATA>> oMap;
+	m_pAdviceManager->GetCheckGroup(oMap);
+	if (oMap.size() == 0)
+	{
+		showTip(QStringLiteral("未选择文件"));
+		/*qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("未选择文件"),\
+			QSize(60,30),QStringLiteral("确定"),1,"",0,"",true);
+		messageSure.exec();*/
+		return;
+	}
+
+	if (0 != choseDownloadDir(m_strLastPath,this))
+		return;
+
+	for (auto &itVec : oMap)
+	{
+		for (auto &it : itVec)
+		{
+			//数据中心查对应key对应文件对
+			REPAIREFILEITEM &itRepairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(m_nCurTaskId, it.nRepairTimes, it.strKey);
+			STADVICEDATA stAdvice;
+			stAdvice.nRepairTimes = itRepairItem.repairNum;
+			stAdvice.strKey = it.strKey;
+			stAdvice.strPicFile = itRepairItem.repairFileUrl;
+			stAdvice.strMediaFile = itRepairItem.soundFileUrl;
+
+			if (downloadOneAdviceCard(stAdvice,m_strLastPath, &itRepairItem) < 0)
+				continue;
+		}
+	}
+}
+
+void videoRoom::onDoubleClickOneAdviceCard(int nRepairTimes, QString strKey)
+{
+	advicePreview(nRepairTimes,strKey);
+}
+
+void videoRoom::onDelAdviceBtnClick()
+{
+	if (m_bTaskListIsEmpty)
+		return;
+
+	qDebug() << "onDelAdviceBtnClick";
+	QMap<int, QVector<STADVICEDATA>> oMap;
+	m_pAdviceManager->GetCheckGroup(oMap);
+	if (oMap.size() == 0)
+	{
+		showTip(QStringLiteral("未选择文件"));
+		return;
+	}
+
+	qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("确定删除所选文件？"));
+	if (1 == messageSure.exec())
+	{
+		qDebug() << endl;
+	}
+	else
+	{
+		return;
+	}
+
+	QVector<qint64> oVec;
+	for (auto &itVec : oMap)
+	{
+		for (auto &it : itVec)
+		{
+			//数据中心查对应key对应文件对
+			REPAIREFILEITEM &itRepairItem = CSingleton<CDataCenter>::GetInstance()->getAdviceFileItem(m_nCurTaskId, it.nRepairTimes, it.strKey);
+			oVec.push_back(itRepairItem.repairFileId);
+		}
+	}
+
+	CRequestDeleteRepairFiles reqDelRepairFiles;
+	reqDelRepairFiles.setParam(m_nCurTaskId, oVec, m_strToken);
+	reqDelRepairFiles.request();
+	if (false == reqDelRepairFiles.getRequestState())
+	{
+		TRACELOG(LOG_ERROR, "请求删除返修文件失败");
+		return;
+	}
+
+	TRACELOG(LOG_INFO, "请求删除返修文件成功");
+
+	m_pAdviceManager->setUpdatesEnabled(false);
+	for (auto &itVec : oMap)
+	{
+		for (auto &it : itVec)
+		{
+			m_pAdviceManager->delOneAdviceCard(it.nRepairTimes, it.strKey);
+			CSingleton<CDataCenter>::GetInstance()->removeAdviceFileItem(m_nCurTaskId, it.nRepairTimes, it.strKey);
+			m_pPlayControlWdg->removeAdvicePoint(it.strPicFile);
+		}
+	}
+	m_pAdviceManager->setUpdatesEnabled(true);
+	update();
+}
+
+void videoRoom::onPassAdviceBtnClick()
+{
+	if (m_bPassed == true)
+	{
+		m_bPassed = false;
+	}
+	else
+	{
+		return;
+	}
+	qDebug() << "onPassAdviceBtnClick";
+	if (m_bTaskListIsEmpty)
+	{
+		m_bPassed = true;
+		return;
+	}
+
+	int editRet = slotTaskChangeCheckEdit(QStringLiteral("编辑文件未提交，是否放弃编辑？"));
+	if (editRet < 0)
+	{
+		m_bPassed = true;
+		return;
+	}
+	
+	TASK_PKG itTask = CSingleton<CDataCenter>::GetInstance()->geCurTaskInfo(m_nCurTaskId);
+	qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("您将通过《%1》任务").arg(m_nCurTaskId));
+	
+	qint64 nCurTaskId = m_nCurTaskId;
+	if (m_stVR.listIds.size()==1)
+	{
+		messageSure.setLastTaskWarning();
+	}
+
+	int nRet = messageSure.exec();
+	if (nRet == 0)
+	{
+		//放弃
+		m_bPassed = true;
+		return;
+	}
+
+	showProcessIng(true);
+
+	//通过-任务进入待付款阶段
+	OSSSTS ossSts = CSingleton<CDataCenter>::GetInstance()->getOssSts();
+	CRequestTaskAuditor reqTaskAuditor;
+	reqTaskAuditor.setParam("Y", m_nCurTaskId, m_strToken, 1);
+	reqTaskAuditor.request();
+	if (false == reqTaskAuditor.getRequestState())
+	{
+		qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("通过《%1》任务失败").arg(m_nCurTaskId));
+		int nRet = messageSure.exec();
+		TRACELOG(LOG_ERROR, "调用通过接口进入下一阶段-付款阶段失败");
+		m_bPassed = true;
+		showProcessIng(false);
+		return;
+	}
+	else
+	{
+		updateMainClient();
+		if (m_stVR.curIdIndex >= m_stVR.listIds.size()-1) //无下一任务
+		{
+			//qint64 nPreTaskId = CSingleton<CDataCenter>::GetInstance()->getPreTaskId(nCurTaskId);
+			if (m_stVR.curIdIndex <= 0) //无上一任务
+			{
+				m_pPlayControlWdg->stopPlay(false);
+				m_bTaskListIsEmpty = true;
+				m_pNextTaskBtn->setEnabled(false);
+				m_pPreTaskBtn->setEnabled(false);
+				m_pSceneManagerWdg->clearAllCard();
+				m_pAdviceManager->clearBodyWdg();
+				//m_pPlayControlWdg->stopPlay();
+				//清除数据中心数据
+				CSingleton<CDataCenter>::GetInstance()->delSceneOneTask(nCurTaskId);
+				//qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("已是唯一审核任务任务,通过后审片室将关闭"), QSize(60, 30), QStringLiteral("确定"), 1, "", 0);
+				//int nRet = messageSure.exec();
+				//if (nRet == 1)
+				{
+					//QPixmap pix(0, 0);
+
+					//QString strTaskNum = QString(QStringLiteral("编号《%1》任务")).arg("");
+					//QString strAuthor = QString(QStringLiteral("制作者:%1")).arg("");
+					//setTitleInfo(strTaskNum, strAuthor);
+					//QString strText = QString("%1/%2").arg(0).arg(0);
+					//m_pBottomExpandWdg->setCurTotalInfo(strText);
+
+					////打开文件
+					////首先控制栏改图标
+					//m_pPlayControlWdg->openFile(pix, "");
+
+					////
+					//m_pPlayControlWdg->stopPlay(false);
+					//m_displayFileType = DISPLAY_PIC;
+					//m_pPlayControlWdg->setPlayMode(m_displayFileType);
+					//m_widgetPaintArea->setPicture(pix, m_strFullPathFile, 0,m_nTaskRepairNum);
+					//setEditMovieSwitch(true);
+
+					showProcessIng(false);
+					m_bPassed = true;
+					hide();
+					return;
+				}
+			}
+			else
+			{
+				m_stVR.listIds.removeAt(m_stVR.curIdIndex);
+
+				onPreTaskBtnClicked(false,true);
+				//清除数据中心数据
+				CSingleton<CDataCenter>::GetInstance()->delSceneOneTask(nCurTaskId);
+			}
+		}
+		else
+		{
+			m_stVR.listIds.removeAt(m_stVR.curIdIndex);
+			m_stVR.curIdIndex--;
+
+			onNextTaskBtnClicked(false, true);
+			//清除数据中心数据
+			CSingleton<CDataCenter>::GetInstance()->delSceneOneTask(nCurTaskId);
+		}
+	}
+
+	m_bPassed = true;
+	showProcessIng(false);
+}
+
+void videoRoom::onRejectAdviceBtnClick()
+{
+	if (m_bPassed == true)
+	{
+		m_bPassed = false;
+	}
+	else
+	{
+		return;
+	}
+	if (m_bTaskListIsEmpty)
+	{
+		m_bPassed = true;
+		return;
+	}
+
+	int editRet = slotTaskChangeCheckEdit(QStringLiteral("编辑文件未提交，是否放弃编辑？"));
+	if (editRet < 0)
+	{
+		m_bPassed = true;
+		return;
+	}
+	
+	qDebug() << "onRejectAdviceBtnClick";
+
+	TASK_PKG itTask = CSingleton<CDataCenter>::GetInstance()->geCurTaskInfo(m_nCurTaskId);
+	qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("您将返修《%1》任务").arg(m_nCurTaskId));
+	//qint64 nPreTaskId = -1;
+	qint64 nCurTaskId = m_nCurTaskId;
+	//qint64 nNextTaskId = CSingleton<CDataCenter>::GetInstance()->getNextTaskId(nCurTaskId);
+	if (m_stVR.listIds.size() == 1) 
+	{
+		messageSure.setLastTaskWarning(QStringLiteral("已是最后一个任务，返修后将为您关闭审片室！"));
+	}
+	int nRet = messageSure.exec();
+	if (nRet == 0)
+	{
+		//放弃
+		m_bPassed = true;
+		return ;
+	}
+
+	showProcessIng(true);
+
+	CRequestTaskAuditor reqTaskAuditor;
+	reqTaskAuditor.setParam("N", m_nCurTaskId, m_strToken,1);
+	reqTaskAuditor.request();
+	if (false == reqTaskAuditor.getRequestState())
+	{
+		TRACELOG(LOG_ERROR, "调用驳回返修接口失败");
+		qWidgetMessageSure messageSure(this, QStringLiteral("提示"), QStringLiteral("驳回返修《%1》任务失败").arg(m_nCurTaskId));
+		int nRet = messageSure.exec();
+		TRACELOG(LOG_ERROR, "调用驳回返修接口失败");
+		m_bPassed = true;
+		showProcessIng(false);
+		return;
+	}
+	else
+	{
+		updateMainClient();
+		//m_pCallBack(ENUMVVR_WEBFUN, "closeUpload()", parent());
+		if (m_stVR.curIdIndex >= m_stVR.listIds.size() - 1) //无下一任务
+		{
+			if (m_stVR.curIdIndex <=0) //无上一任务
+			{
+				m_pPlayControlWdg->stopPlay(false);
+				m_bTaskListIsEmpty = true;
+				m_pNextTaskBtn->setEnabled(false);
+				m_pPreTaskBtn->setEnabled(false);
+				m_pSceneManagerWdg->clearAllCard();
+				m_pAdviceManager->clearBodyWdg();
+				//清除数据中心数据
+				CSingleton<CDataCenter>::GetInstance()->delSceneOneTask(nCurTaskId);
+				showProcessIng(false);
+				m_bPassed = true;
+				hide();
+				return;
+			}
+			else
+			{
+				m_stVR.listIds.removeAt(m_stVR.curIdIndex);
+				//m_stVR.curIdIndex--;
+
+				onPreTaskBtnClicked(false,true);
+				//清除数据中心数据
+				CSingleton<CDataCenter>::GetInstance()->delSceneOneTask(nCurTaskId);
+			}
+		}
+		else
+		{
+			m_stVR.listIds.removeAt(m_stVR.curIdIndex);
+			m_stVR.curIdIndex--;
+
+			onNextTaskBtnClicked(false,true);
+			//清除数据中心数据
+			CSingleton<CDataCenter>::GetInstance()->delSceneOneTask(nCurTaskId);
+		}
+		qDebug() << "调用返修任务成功";
+	}
+	m_bPassed = true;
+	showProcessIng(false);
+}
+
+void videoRoom::onPenIdChanged(int id)
+{
+	//updateMainClient();
+	//m_pCallBack(ENUMVVR_WEBFUN, "closeUpload()", parent());
+	//m_dockTextPen->setPen(ITEM_EMPTY, m_mapPenInfo[ITEM_TEXT]);
+	switch (id)
+	{
+	case 0:
+		m_widgetPaintArea->setPen(ITEM_BRUSH,m_mapPenInfo[ITEM_BRUSH]);
+		m_dockShapePen->setPen(ITEM_BRUSH, m_mapPenInfo[ITEM_BRUSH]);
+		m_pPlayControlWdg->setEditPen(ITEM_BRUSH);
+		break;
+	case 1:
+		m_widgetPaintArea->setPen(ITEM_RECT, m_mapPenInfo[ITEM_RECT]);
+		m_dockShapePen->setPen(ITEM_RECT, m_mapPenInfo[ITEM_RECT]);
+		m_pPlayControlWdg->setEditPen(ITEM_RECT);
+		break;
+	case 2:
+		m_widgetPaintArea->setPen(ITEM_ELLIPSE, m_mapPenInfo[ITEM_ELLIPSE]);
+		m_dockShapePen->setPen(ITEM_ELLIPSE, m_mapPenInfo[ITEM_ELLIPSE]);
+		m_pPlayControlWdg->setEditPen(ITEM_ELLIPSE);
+		break;
+	case 3:
+		m_widgetPaintArea->setPen(ITEM_ARROW, m_mapPenInfo[ITEM_ARROW]);
+		m_dockShapePen->setPen(ITEM_ARROW, m_mapPenInfo[ITEM_ARROW]);
+		m_pPlayControlWdg->setEditPen(ITEM_ARROW);
+		break;
+	case 4:
